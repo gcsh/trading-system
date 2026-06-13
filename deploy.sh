@@ -81,7 +81,7 @@ fi
 log "Building deploy zip..."
 ZIP=/tmp/trading-bot-deploy.zip
 rm -f "$ZIP"
-zip -qr "$ZIP" backend frontend/dist ml requirements.txt \
+zip -qr "$ZIP" backend frontend/dist ml infra requirements.txt \
   -x '*/__pycache__/*' '*.pyc' '*.pyo' '*/node_modules/*' '*/.DS_Store'
 log "Zip size: $(du -h "$ZIP" | cut -f1)"
 
