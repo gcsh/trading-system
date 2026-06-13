@@ -188,14 +188,23 @@ async def equity_curve(
                 latest_dt = rows[-1].timestamp.date().isoformat()
                 dataset_note = f"Showing {latest_dt} session — markets closed today."
 
-        # Discontinuity filter (Bug fix 2026-06-02): if an accounting model
-        # change (e.g. complex-MTM fix #131) created a step jump > 5% in a
-        # single tick, the pre-jump points represent a different valuation
-        # regime and would misrepresent the chart's "today's gain." For
-        # short-range views (1d/1w), rebase after the LAST such jump so the
-        # chart axis reflects the current accounting model only.
+        # Discontinuity filter (Bug fix 2026-06-02; threshold raised 2026-06-13):
+        # If an accounting model change (e.g. complex-MTM fix #131, the
+        # 2026-06-13 baseline rollback) created a step jump in a single
+        # tick, the pre-jump points represent a different valuation regime
+        # and would misrepresent the chart's "today's gain." For short-range
+        # views (1d/1w), rebase after the LAST such jump.
+        #
+        # Threshold was 5% — too low: a SELL_CSP credit on a $400 baseline
+        # easily clears 5%, which made the filter rebase on every legitimate
+        # trade and collapse the chart to a single point. Real accounting-
+        # model changes show up as 50%+ steps (e.g. cash $391 → $100k from
+        # the 2026-06-12 start-trial overwrite). 50% is the right floor.
+        # Also: if the rebase would leave fewer than MIN_ROWS rows visible,
+        # treat the jump as "normal trading" and keep the original series.
         if rng in ("1d", "1w") and len(rows) >= 2:
-            DISCONTINUITY_PCT = 0.05
+            DISCONTINUITY_PCT = 0.50
+            MIN_ROWS_AFTER_REBASE = 10
             baseline_idx = 0
             for i in range(1, len(rows)):
                 prev_val = rows[i - 1].portfolio_value or 0.0
@@ -204,7 +213,7 @@ async def equity_curve(
                 step = abs((rows[i].portfolio_value or 0.0) - prev_val) / abs(prev_val)
                 if step >= DISCONTINUITY_PCT:
                     baseline_idx = i
-            if baseline_idx > 0:
+            if baseline_idx > 0 and (len(rows) - baseline_idx) >= MIN_ROWS_AFTER_REBASE:
                 rows = rows[baseline_idx:]
 
         # Decimate evenly when we have more rows than the requested point
