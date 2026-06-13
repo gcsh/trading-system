@@ -511,8 +511,24 @@ def create_app() -> FastAPI:
                 "message": "Trading bot API is running. Build the frontend with 'cd frontend && npm run build' to serve the UI here.",
             }
 
+    # Tier 3 of perf plan: the engine + scheduler now live in a separate
+    # process (trading-engine.service). The API process sets TB_API_ONLY=1
+    # to skip starting them — this prevents the API uvicorn (which runs
+    # with --workers 2) from also kicking off engine cycles, which would
+    # both (a) waste CPU and (b) trigger N-way write races on the DB.
+    #
+    # The engine process (trading-engine.service) leaves TB_API_ONLY unset
+    # and runs through the full startup path: scheduler + live loop.
+    _API_ONLY = os.getenv("TB_API_ONLY", "0") == "1"
+
     @app.on_event("startup")
     async def _startup() -> None:
+        if _API_ONLY:
+            logging.getLogger("backend.startup_audit").info(
+                "TB_API_ONLY=1 — skipping scheduler + engine startup"
+            )
+            return
+
         if os.getenv("DISABLE_SCHEDULER") != "1":
             app.state.scheduler.start()
         _log_feed_audit()
@@ -545,6 +561,8 @@ def create_app() -> FastAPI:
 
     @app.on_event("shutdown")
     async def _shutdown() -> None:
+        if _API_ONLY:
+            return
         app.state.scheduler.shutdown()
 
     return app
