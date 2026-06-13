@@ -1,0 +1,38 @@
+name: long_put
+label: "Long Put"
+direction: short
+category: defined_risk
+
+requires_regime:
+  trend: [bearish]
+  intraday_regime:
+    not_in: [panic, capitulation]
+requires_iv_rank_range: [0, 60]
+requires_dte_range: [14, 45]
+requires_gamma_state:
+  not: long_gamma
+
+legs:
+  - side: long_put
+    delta_target: 0.55
+
+max_loss_calculation: premium_paid
+
+edge_keys:
+  - {pattern: vwap_rejection,              regime: trending_down, vol_state: __ANY__}
+  - {pattern: wyckoff_distribution_phase,  regime: trending_down, vol_state: __ANY__}
+  - {pattern: talib_evening_star,          regime: trending_down, vol_state: __ANY__}
+  - {pattern: talib_hanging_man,           regime: trending_down, vol_state: __ANY__}
+  - {pattern: talib_shooting_star,         regime: trending_down, vol_state: __ANY__}
+  - {pattern: bear_flag,                   regime: trending_down, vol_state: __ANY__}
+
+scoring_weights:
+  pattern_alignment: 0.35
+  regime_alignment: 0.30
+  iv_alignment: 0.20
+  analog_support: 0.15
+
+invalidation_default:
+  - "Underlying closes above the prior swing high"
+  - "Trend flips bullish on the parent timeframe"
+  - "Dealer gamma flips long and pins price"

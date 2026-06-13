@@ -1,0 +1,46 @@
+# No 1:1 existing strategy class — iron butterfly follows standard
+# options-trading convention: short straddle at ATM + long wings as
+# defined-risk insurance. Sized for very high IV rank to maximize
+# theta capture while underlying pins near short strikes.
+name: iron_butterfly
+label: "Iron Butterfly"
+direction: neutral
+category: defined_risk
+
+requires_regime:
+  trend: [choppy]
+  intraday_regime:
+    not_in: [panic, capitulation, trending_up, trending_down, squeeze]
+requires_iv_rank_range: [60, 95]
+requires_dte_range: [21, 45]
+requires_gamma_state:
+  not: short_gamma
+
+legs:
+  - side: short_call
+    delta_target: 0.50
+  - side: short_put
+    delta_target: 0.50
+  - side: long_call
+    delta_target: 0.10
+  - side: long_put
+    delta_target: 0.10
+
+max_loss_calculation: wing_width_minus_net_credit
+
+edge_keys:
+  - {pattern: composite_value_area,  regime: choppy, vol_state: __ANY__}
+  - {pattern: poc_retest,            regime: choppy, vol_state: __ANY__}
+  - {pattern: value_area_rejection,  regime: choppy, vol_state: __ANY__}
+  - {pattern: iv_compression,        regime: choppy, vol_state: __ANY__}
+
+scoring_weights:
+  pattern_alignment: 0.20
+  regime_alignment: 0.30
+  iv_alignment: 0.40
+  analog_support: 0.10
+
+invalidation_default:
+  - "Underlying breaches either wing strike"
+  - "Realized volatility expands above the implied move"
+  - "Dealer regime flips short-gamma before expiry"

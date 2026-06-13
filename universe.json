@@ -1,0 +1,38 @@
+{
+  "version": "2026-06-09",
+  "description": "MITS Phase 11 — A-grade 40 ticker universe. Picked for market-mover potential, large institutional presence, strong technicals + fundamentals.",
+  "buckets": {
+    "megacap_tech": ["NVDA", "MSFT", "AAPL", "META", "AMZN", "GOOG", "TSLA", "AMD"],
+    "mega_quality": ["BRK.B", "V", "MA", "COST"],
+    "financials": ["JPM", "BAC", "GS", "MS"],
+    "healthcare": ["UNH", "LLY", "JNJ"],
+    "consumer": ["WMT", "HD", "MCD"],
+    "industrial_energy": ["CAT", "XOM", "CVX"],
+    "communication": ["NFLX", "DIS"],
+    "semiconductors": ["AVGO", "TSM"],
+    "growth_disruption": ["PLTR", "COIN", "SHOP"],
+    "index_etf": ["SPY", "QQQ", "IWM", "DIA"],
+    "sector_etf": ["XLK", "XLF", "XLE", "XLV"]
+  },
+  "tickers": [
+    "NVDA","MSFT","AAPL","META","AMZN","GOOG","TSLA","AMD",
+    "BRK.B","V","MA","COST",
+    "JPM","BAC","GS","MS",
+    "UNH","LLY","JNJ",
+    "WMT","HD","MCD",
+    "CAT","XOM","CVX",
+    "NFLX","DIS",
+    "AVGO","TSM",
+    "PLTR","COIN","SHOP",
+    "SPY","QQQ","IWM","DIA",
+    "XLK","XLF","XLE","XLV"
+  ],
+  "count": 40,
+  "criteria": [
+    "daily dollar volume > $1B",
+    "options OI > 50k contracts",
+    "market cap > $50B OR exceptional growth trajectory",
+    "5y total return > S&P benchmark OR strategic disruption",
+    "sector breadth across 11 SPDR sectors"
+  ]
+}

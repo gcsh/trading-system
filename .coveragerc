@@ -1,0 +1,27 @@
+[run]
+source = backend
+branch = True
+omit =
+    backend/main.py
+    backend/api/__init__.py
+    backend/db.py
+    */__init__.py
+    */tests/*
+    */migrations/*
+
+[report]
+precision = 1
+show_missing = True
+skip_covered = False
+exclude_lines =
+    pragma: no cover
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    @abstractmethod
+
+# Per-module coverage targets (Enterprise QA: ≥90% on critical paths).
+# Failing thresholds: enforce in CI with `coverage report --fail-under=...`.
+fail_under = 70
+
+[html]
+directory = coverage_html

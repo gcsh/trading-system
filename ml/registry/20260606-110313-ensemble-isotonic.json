@@ -1,0 +1,11 @@
+{
+  "version": "20260606-110313-ensemble-isotonic",
+  "model_type": "ensemble",
+  "calibration": "isotonic",
+  "trained_at": "2026-06-06T11:03:13",
+  "rows_trained": 60,
+  "cv_brier": 0.2145,
+  "cv_calibration_error": 0.0556,
+  "notes": "stage-10b ensemble test",
+  "artifact_path": "./ml/registry/20260606-110313-ensemble-isotonic.pkl"
+}

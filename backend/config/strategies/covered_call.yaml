@@ -1,0 +1,34 @@
+name: covered_call
+label: "Covered Call"
+direction: long
+category: defined_risk
+
+requires_regime:
+  trend: [bullish, choppy]
+  intraday_regime:
+    not_in: [panic, capitulation, trending_up]
+requires_iv_rank_range: [25, 80]
+requires_dte_range: [21, 45]
+
+legs:
+  - side: short_call
+    delta_target: 0.30
+
+max_loss_calculation: long_stock_drawdown_minus_credit
+
+edge_keys:
+  - {pattern: breakout,         regime: trending_up, vol_state: __ANY__}
+  - {pattern: vwap_reclaim,     regime: trending_up, vol_state: __ANY__}
+  - {pattern: pullback,         regime: trending_up, vol_state: __ANY__}
+  - {pattern: iv_expansion,     regime: trending_up, vol_state: __ANY__}
+
+scoring_weights:
+  pattern_alignment: 0.20
+  regime_alignment: 0.30
+  iv_alignment: 0.35
+  analog_support: 0.15
+
+invalidation_default:
+  - "Underlying breaks out above short strike with momentum"
+  - "Earnings catalyst lands inside DTE"
+  - "Trend flips bearish — long stock leg at risk"

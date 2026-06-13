@@ -1,0 +1,38 @@
+name: long_call
+label: "Long Call"
+direction: long
+category: defined_risk
+
+requires_regime:
+  trend: [bullish]
+  intraday_regime:
+    not_in: [panic, capitulation]
+requires_iv_rank_range: [0, 60]
+requires_dte_range: [14, 45]
+requires_gamma_state:
+  not: short_gamma
+
+legs:
+  - side: long_call
+    delta_target: 0.55
+
+max_loss_calculation: premium_paid
+
+edge_keys:
+  - {pattern: vwap_reclaim,               regime: trending_up, vol_state: __ANY__}
+  - {pattern: order_block,                regime: trending_up, vol_state: __ANY__}
+  - {pattern: fair_value_gap,             regime: trending_up, vol_state: __ANY__}
+  - {pattern: breakout,                   regime: trending_up, vol_state: __ANY__}
+  - {pattern: wyckoff_accumulation_phase, regime: trending_up, vol_state: __ANY__}
+  - {pattern: talib_morning_star,         regime: trending_up, vol_state: __ANY__}
+
+scoring_weights:
+  pattern_alignment: 0.35
+  regime_alignment: 0.30
+  iv_alignment: 0.20
+  analog_support: 0.15
+
+invalidation_default:
+  - "Underlying closes below the prior swing low"
+  - "Volatility regime expands to high before thesis plays out"
+  - "Trend flips bearish on the parent timeframe"

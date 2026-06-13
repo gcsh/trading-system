@@ -1,0 +1,39 @@
+name: put_debit_spread
+label: "Put Debit Spread"
+direction: short
+category: defined_risk
+
+requires_regime:
+  trend: [bearish]
+  intraday_regime:
+    not_in: [panic, capitulation]
+requires_iv_rank_range: [0, 55]
+requires_dte_range: [21, 45]
+requires_gamma_state:
+  not: long_gamma
+
+legs:
+  - side: long_put
+    delta_target: 0.50
+  - side: short_put
+    delta_target: 0.25
+
+max_loss_calculation: net_debit_paid
+
+edge_keys:
+  - {pattern: vwap_rejection,             regime: trending_down, vol_state: __ANY__}
+  - {pattern: wyckoff_distribution_phase, regime: trending_down, vol_state: __ANY__}
+  - {pattern: talib_evening_star,         regime: trending_down, vol_state: __ANY__}
+  - {pattern: wyckoff_upthrust,           regime: trending_down, vol_state: __ANY__}
+  - {pattern: talib_shooting_star,        regime: trending_down, vol_state: __ANY__}
+
+scoring_weights:
+  pattern_alignment: 0.30
+  regime_alignment: 0.30
+  iv_alignment: 0.25
+  analog_support: 0.15
+
+invalidation_default:
+  - "Underlying closes above long-leg strike"
+  - "Trend flips bullish before expiry"
+  - "IV crush before move materializes"

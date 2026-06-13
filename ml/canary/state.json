@@ -1,0 +1,8 @@
+{
+  "state": "paper",
+  "capital": 0.0,
+  "promoted_at": "2026-05-29T19:13:37",
+  "rolled_back_at": "2026-05-29T19:13:37",
+  "rollback_reason": "test rollback",
+  "notes": []
+}

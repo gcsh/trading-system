@@ -1,0 +1,40 @@
+name: bull_put_spread
+label: "Bull Put Spread"
+direction: long
+category: defined_risk
+
+requires_regime:
+  trend: [bullish]
+  intraday_regime:
+    not_in: [panic, capitulation]
+requires_iv_rank_range: [25, 70]
+requires_dte_range: [21, 45]
+requires_gamma_state:
+  not: short_gamma
+
+legs:
+  - side: short_put
+    delta_target: 0.30
+  - side: long_put
+    delta_target: 0.15
+
+max_loss_calculation: spread_width_minus_credit
+
+edge_keys:
+  - {pattern: vwap_reclaim,               regime: trending_up, vol_state: __ANY__}
+  - {pattern: order_block,                regime: trending_up, vol_state: __ANY__}
+  - {pattern: fair_value_gap,             regime: trending_up, vol_state: __ANY__}
+  - {pattern: failed_breakdown,           regime: trending_up, vol_state: __ANY__}
+  - {pattern: wyckoff_accumulation_phase, regime: trending_up, vol_state: __ANY__}
+  - {pattern: pullback,                   regime: trending_up, vol_state: __ANY__}
+
+scoring_weights:
+  pattern_alignment: 0.30
+  regime_alignment: 0.30
+  iv_alignment: 0.25
+  analog_support: 0.15
+
+invalidation_default:
+  - "Underlying closes below short-leg strike"
+  - "Volatility regime expands to high"
+  - "Dealer regime flips short-gamma — mean-reversion edge breaks"

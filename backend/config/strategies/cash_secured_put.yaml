@@ -1,0 +1,37 @@
+name: cash_secured_put
+label: "Cash-Secured Put"
+direction: long
+category: undefined_risk
+
+requires_regime:
+  trend: [bullish, choppy]
+  intraday_regime:
+    not_in: [panic, capitulation, trending_down]
+requires_iv_rank_range: [30, 90]
+requires_dte_range: [21, 45]
+requires_gamma_state:
+  not: short_gamma
+
+legs:
+  - side: short_put
+    delta_target: 0.30
+
+max_loss_calculation: strike_minus_credit_assignment
+
+edge_keys:
+  - {pattern: order_block,          regime: trending_up, vol_state: __ANY__}
+  - {pattern: fair_value_gap,       regime: trending_up, vol_state: __ANY__}
+  - {pattern: talib_hammer,         regime: trending_up, vol_state: __ANY__}
+  - {pattern: wyckoff_spring,       regime: trending_up, vol_state: __ANY__}
+  - {pattern: failed_breakdown,     regime: trending_up, vol_state: __ANY__}
+
+scoring_weights:
+  pattern_alignment: 0.25
+  regime_alignment: 0.30
+  iv_alignment: 0.30
+  analog_support: 0.15
+
+invalidation_default:
+  - "Underlying drops more than 1.5x ATR below strike"
+  - "Earnings catalyst lands inside DTE"
+  - "Fundamentals deteriorate — would not want assignment"

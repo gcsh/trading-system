@@ -1,0 +1,369 @@
+# Future Reference — captured 2026-06-02
+
+Things that are useful to know in future sessions but don't fit cleanly
+in MEMORY.md or the codebase itself. Add to this file when something
+non-obvious comes up; trim entries that age out.
+
+---
+
+## Disconnected MCP servers (do not search for these)
+
+These tools disconnected mid-session on 2026-06-02. Do NOT call
+ToolSearch with these names — it will return no match and waste a turn:
+
+  - mcp__claude_ai_Gmail__authenticate
+  - mcp__claude_ai_Gmail__complete_authentication
+  - mcp__claude_ai_Google_Calendar__authenticate
+  - mcp__claude_ai_Google_Calendar__complete_authentication
+  - mcp__claude_ai_Google_Drive__authenticate
+  - mcp__claude_ai_Google_Drive__complete_authentication
+
+If a future session needs Gmail/Calendar/Drive access, the user has to
+re-attach the connector in their Claude Code settings first.
+
+---
+
+## ThetaData v3 endpoint catalog — what works on Options Standard tier
+
+Verified live against the EC2-hosted terminal on 2026-06-02. Update this
+if endpoints get added/removed.
+
+### Works (HTTP 200)
+  GET /v3/option/list/expirations?symbol=X&format=json
+  GET /v3/option/list/strikes?symbol=X&expiration=YYYY-MM-DD&format=json
+  GET /v3/option/snapshot/quote?symbol=X&expiration=YYYY-MM-DD&strike=N.NNN&right=C&format=json
+  GET /v3/option/snapshot/quote?...&strike=*&right=both    (full chain)
+  GET /v3/option/snapshot/trade?...
+  GET /v3/option/snapshot/ohlc?...
+  GET /v3/option/snapshot/open_interest?...
+  GET /v3/option/history/eod?symbol=X&expiration=YYYY-MM-DD&strike=N&right=C&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&format=json
+
+### NOT available on Standard tier (all returned 404)
+  /v3/option/snapshot/implied_volatility
+  /v3/option/snapshot/greeks
+  /v3/option/snapshot/all
+  /v3/option/snapshot/delta
+  /v3/option/bulk_snapshot/*
+  /v3/option/history/implied_volatility
+  /v3/option/historical/*
+
+Implication: IV and greeks must be COMPUTED locally from quote data
+(Brenner-Subrahmanyam for ATM IV, full Black-Scholes for non-ATM
+greeks). This actually plays well with the data-integrity layer
+principle — vendor IV is no longer something we'd have to trust.
+
+### Quirks
+  - Strike param is decimal in dollars: 200.00 (not 200000 cents)
+  - Date param is ISO YYYY-MM-DD (not 8-digit YYYYMMDD)
+  - Default response format is CSV — always pass format=json
+  - HTTP 472 = "no data for your request" (e.g. wrong strike for
+    expiration). Treat as None, not an error.
+  - HTTP 403 = subscription tier insufficient. Log and skip.
+  - HTTP 410 = API version mismatch (you used /v2/* paths)
+  - Stock endpoints return 403 — we deliberately skipped Stock
+    subscription, equity quotes stay on yfinance.
+
+---
+
+## Deploy + verification mechanics on the EC2
+
+### Instance + creds
+  Instance ID:    i-0426a45181d08adff
+  Region:         us-east-1
+  EIP:            32.197.70.83 (no inbound, Cloudflare Tunnel only)
+  Public URL:     https://pillar-watch.com (Cloudflare Access gated)
+  IAM role:       trading-bot-paper-ec2-role
+  Account:        157320905163
+
+### S3 buckets
+  Code/artifacts: s3://tradingbot-artifacts-157320905163/
+  Terraform tfstate: s3://tradingbot-tfstate-157320905163/ (DON'T TOUCH)
+
+### Deploy backend changes
+  ./deploy.sh --skip-frontend --no-wait
+    -> zips backend + uploads to S3 + SSM-triggers restart
+    -> trading-bot.service is the systemd unit
+    -> bot Python: /opt/trading-bot/.venv/bin/python (-> python3.11)
+    -> pytest: /opt/trading-bot/.venv/bin/pytest
+    -> bot user: tradingbot
+
+### Live-test a Python change against the production env
+  Pattern: write small script to /tmp on Mac → upload to S3 →
+  SSM-pull to EC2 → run with the bot's venv:
+
+    cat > /tmp/verify.py <<'EOF'
+    import sys; sys.path.insert(0, "/opt/trading-bot")
+    from backend.bot.data.options import options_snapshot
+    print(options_snapshot("AAPL", 315.20))
+    EOF
+    aws s3 cp /tmp/verify.py s3://tradingbot-artifacts-157320905163/scratch/verify.py
+    aws ssm send-command --instance-ids i-0426a45181d08adff \
+      --document-name AWS-RunShellScript --region us-east-1 \
+      --parameters 'commands=["aws s3 cp s3://tradingbot-artifacts-157320905163/scratch/verify.py /tmp/v.py","sudo -u tradingbot env PYTHONPATH=/opt/trading-bot /opt/trading-bot/.venv/bin/python /tmp/v.py"]'
+
+### Pytest from CI/local
+  Tests do NOT ship with deploy (intentional — source-tree only). To
+  run pytest, you need the test files on the box. Either:
+    (a) source-mount the repo locally + install requirements.txt into
+        a venv on Mac, or
+    (b) push tests to /tmp via S3 + run on EC2 explicitly.
+  The Mac doesn't have a project-level venv right now — `python3` is
+  /usr/local/bin/python3.14 without pytest installed. Make a venv if
+  you want local test runs.
+
+---
+
+## ThetaTerminal v3 install gotchas (if re-installing)
+
+These are documented in reference_options_data_vendors.md but worth
+listing again for quick scan:
+
+  1. **Java 21 required.** Manifest says Build-Jdk-Spec: 21. Java 17
+     won't load the class files. Install java-21-amazon-corretto.
+  2. **Heap caps required.** Default JVM ergonomics OOM at Disruptor
+     ring buffer init. Use --max-terminal-heap 512m --min-terminal-heap 256m.
+  3. **Bootstrap downloads versioned jar on first run** into
+     /opt/thetadata/lib/<version>.jar. Don't pre-create that dir with
+     restrictive perms — the bootstrap needs to create it itself with
+     exec/search bit set.
+  4. **Don't `umask 0177` in wrapper scripts before exec'ing java** —
+     the umask leaks into the child and breaks subdirectory creation.
+     Use `chmod 0600` after write instead.
+  5. **Ports are 25503 (REST+MCP) and 25520 (streaming)** in v3 — not
+     25510/25520 like older versions. /v2/* returns HTTP 410.
+  6. **Bind is 0.0.0.0** by default. Security group blocks inbound
+     anyway, so localhost-only in practice. Tighten via config.toml
+     if you want belt-and-suspenders.
+  7. **Memory budget:** ~700 MB RSS steady (512 heap + 200 non-heap).
+     On t4g.small (1.8 GB), leaves ~500 MB free with bot running.
+     Watch for OOM under load; t4g.medium adds $15/mo of headroom.
+
+---
+
+## Tasks discussed in prior sessions (verify before assuming undone)
+
+The task tracker shows items #131-138 with statuses set by other sessions
+or by the user. Some may be partially implemented, some not at all.
+ALWAYS run a state check before claiming they're done OR before claiming
+"not me, not my problem." Lost-context dismissal of these specific items
+happened in the 2026-06-02 session.
+
+  - **#131 Complex-instrument MTM in paper_executor.** Check
+    `backend/bot/paper_executor.py` `positions()` for a `kind ==
+    "complex"` branch. If missing, SELL_CSP / iron condor positions
+    show `market_value=0` in the UI. Original todo at todo.md item #3.
+  - **#132 Memory-rich agent context.** Check
+    `backend/bot/engine.py` for `build_agent_context()`. Also check
+    that `journal.similar_trades()` and
+    `scorecard.recent_performance()` exist as the dependent retrieval
+    helpers. Original at todo.md item #1.
+  - **#133 Item #6 Tier A — Gamma feature suite.** Check
+    `backend/bot/signals/gex.py` for: Net GEX, Max Gamma / Peak Gamma,
+    Vol Trigger, Dealer Hedging Flow, Pin Risk. Original at todo.md
+    item #6.
+  - **#134 Item #14 Heatseeker visual upgrade.** Check
+    `frontend/src/pages/Heatseeker.jsx` (or equivalent) for the 3-panel
+    layout + Long Gamma regime strip. Original at todo.md item #14.
+  - **#135 Run full regression test suite.** Pytest + Playwright.
+  - **#136 Architecture audit.** Cross-reference all the new
+    integration points; produce a gap report.
+  - **#137 UI/page audit.** Render check every page, confirm new data
+    surfaces.
+  - **#138 Final summary + architecture flowchart.**
+
+If a session ever invents NEW tasks with these descriptions instead of
+checking #131-138, that's the regression to fix.
+
+---
+
+## ThetaData IV history backfill — 5 tickers return 0 expirations (2026-06-02)
+
+The 365-day backfill populated 7 of the 12 watchlist tickers cleanly:
+
+  SPY 116, AAPL 114, TSLA 122, NVDA 117, QQQ 111, MSFT 113, AMD 133
+
+But these 5 tickers got 0 inserted (251 skipped → "no straddle data for
+that date"):
+
+  META, CRWD, SNOW, NFLX, WULF
+
+Direct debug confirmed (via `_atm_iv_on_date` step-through for META):
+``client.list_expirations("META")`` returns ZERO expirations from the
+local terminal, even though META is a huge-cap liquid name with deep
+options activity. AAPL on the same client returns 790 expirations.
+So the gap is **terminal-side, NOT a client bug** — likely either:
+
+  - Vendor symbol-coverage gap (META options data not in our Standard
+    tier's symbol allowlist), OR
+  - Local terminal cache state (worth restarting `thetadata.service`
+    and re-checking), OR
+  - Symbol normalization quirk (the FB-→-META rename used to require
+    aliasing on some vendors).
+
+Until this is debugged, those 5 tickers fall back to the linear
+`_iv_rank_estimate` (their `iv_rank_estimated` flag stays `true`). The
+bot still functions for them; only the IV-rank trustworthiness is
+degraded. Don't waste time re-running the backfill expecting a different
+result — first reproduce the 0-expiration issue and contact ThetaData
+support if it persists.
+
+Next-session diagnosis steps:
+  1. `sudo systemctl restart thetadata.service` and wait 30s for the
+     terminal to re-auth.
+  2. `curl 'http://127.0.0.1:25503/v3/option/list/expirations?symbol=META&format=json'`
+  3. If still 0, file a ThetaData support ticket with the bundle
+     identifier and these 5 symbols.
+
+---
+
+## Observability infrastructure map (discovered during P1.5)
+
+Found while figuring out where to plug in the data-quality aggregates.
+Future sessions should reuse this rather than rediscovering it.
+
+  - **`backend/bot/warnings_log.py`** — in-memory ring buffer that
+    captures every WARNING+ log record (size 200). The Python logging
+    handler is installed at app boot in `backend/main.py:93`.
+  - **`backend/api/routes/authority.py`** — exposes the ring buffer at
+    `GET /system/warnings` + `POST /system/warnings/clear`. This file
+    also hosts the new `GET /system/data-quality` + `POST
+    /system/data-quality/reset` endpoints (P1.5). Single file for all
+    operator-facing `/system/*` endpoints.
+  - **`frontend/src/components/WarningsChip.jsx`** — the topbar chip
+    badge that displays warnings count and opens a panel. Lives next to
+    the equity readout. The `DataQualityChip.jsx` from P1.5 lives next
+    to it as a sibling and follows the same fetch / polling pattern.
+  - **In-process aggregate pattern** — counters live as module-level
+    dicts behind a `threading.Lock`; reset wipes them and resets the
+    session-start timestamp. See `backend/bot/data/options.py`'s
+    `_PROVIDER_HITS` + `_SANITY_FLAG_HITS` for the canonical example.
+
+If adding a new operator-observability surface in the future:
+  1. Track the counter in-process near the logic that updates it
+     (locked dict pattern, normalize keys with a helper so dynamic
+     suffixes like `stale_900s` bucket to `stale`).
+  2. Expose two endpoints in `authority.py`: a GET that returns the
+     snapshot, a POST `.../reset` that wipes.
+  3. Sibling component in `frontend/src/components/*Chip.jsx`
+     polling the GET on a sensible cadence (30-60s for non-urgent
+     observability).
+  4. Mount the new chip near the existing chips in the topbar.
+
+---
+
+## P1.2 follow-ups (deferred from 2026-06-02 session)
+
+  1. **Put-call parity check.** Needs spot + risk-free rate + dividend
+     yield. We have FRED for rates (DFF). We have yfinance for
+     dividends. The check is `|C − P − (S − K·e^(−rT) − q)| <
+     tolerance`. Useful but lower priority than staleness — the
+     staleness catch already handles the dominant failure mode.
+
+  2. **IV smile monotonicity.** Chain-level check across strikes.
+     Catches "this one strike's IV is way off the smile curve" →
+     likely vendor cleanup gap. Requires computing IV per strike, which
+     fits naturally with the delta-band selection work (P1.4
+     follow-up #3).
+
+  3. **Self-regression / intra-tick consistency.** Cache last N IV
+     reads per strike, flag when current IV differs by > N standard
+     deviations. Most useful intraday during high-volume sessions.
+     Deferred — needs in-process state design and tuning.
+
+  4. **Provider-fallback observability.** When sanity rejects
+     ThetaData and we fall back to yfinance, that's currently a single
+     WARNING log line. Could be surfaced on the observability page as
+     a rolling count, with per-flag breakdown. Operator should see
+     "sanity rejected 12 quotes today, 9 stale, 3 wide-spread."
+
+---
+
+## P1.3 follow-ups (deferred from 2026-06-02 session)
+
+  1. **Only AAPL is backfilled.** Other watchlist tickers (TSLA, NVDA,
+     MSFT, SPY, etc.) still return `iv_rank_estimated: true` until
+     backfilled. Should run the CLI for each on next session.
+
+  2. **Only 90 days backfilled, not 365.** 23 samples is barely above
+     the `min_samples=20` floor. 90 days produced 23 sampled trading
+     days (the other ~40 were weekends / holidays / no-straddle days).
+     Going to 365 calendar days would yield ~85-100 samples for a more
+     stable percentile distribution.
+
+  3. **No periodic backfill watcher.** Live capture handles "from now
+     on" but if the bot is down for a few days, those gaps don't
+     backfill automatically. Could add a daily cron task — minor.
+
+  4. **No backfill for tickers that join the watchlist later.** When a
+     new ticker is added to the watchlist, it'd take 30 days of live
+     capture to cross the `min_samples` floor. A "warm-start" hook on
+     watchlist-add would fix this — minor.
+
+---
+
+## P1.4 follow-ups (deferred from 2026-06-02 session)
+
+These are explicit scope boundaries from the P1.4 chain-aware selection
+work — each is a real gap, none is blocking, all are small enough to
+pick up individually. Listed in roughly priority order.
+
+  1. **Replace `dte=30` literals in strategies.** All 14 strategies in
+     `backend/bot/strategies/all_strategies.py` still write
+     `Signal(dte=30, metadata={"dte": 30})` as hardcoded literals. The
+     `chain_expiry()` helper exists in `options.py`; the refactor pattern
+     is to call `expiry = chain_expiry(ticker, target_dte=30)`, then
+     `actual_dte = (expiry - date.today()).days if expiry else 30`, then
+     use `actual_dte` everywhere `30` currently appears. Touch each
+     strategy individually — the change is per-strategy small but the
+     test coverage matters per-strategy.
+
+  2. **Moneyness-drift signaling.** When liquidity forces `chain_strike`
+     to pick a strike further from target than the strategy intended
+     (e.g. requested 5% OTM, got 1.6% OTM because the closer strike had
+     no quote), the resulting Signal does not flag the drift. Chairman
+     and risk sizing can't see the intent-vs-reality mismatch. Add
+     `metadata["target_strike"]` and `metadata["target_dte"]` to every
+     options Signal so downstream can compare. Maybe also add a
+     `moneyness_actual` field computed at signal time.
+
+  3. **Delta-band selection in `chain_strike`.** Today the picker is
+     "closest listed strike to (spot × (1+moneyness)) that has a quote
+     within max_spread_pct." True institutional selection would target
+     a delta band (e.g. 0.30 ± 0.05 for a CSP). That needs proper
+     Black-Scholes greeks per strike, which fits naturally with P1.3 —
+     when we're already computing IV per strike for the percentile
+     backfill, computing delta is incremental. Add a `target_delta`
+     param to `chain_strike` and prefer it when provided, falling back
+     to moneyness when not.
+
+  4. **`list_expirations` not cached.** Only `chain_snapshot` has a TTL
+     cache. Expirations don't change intraday so a 1-hour (or
+     end-of-day) cache on `list_expirations` would save ~500 redundant
+     terminal calls per cycle. Tiny change in `thetadata.py`, same
+     pattern as the chain cache.
+
+  5. **Engine-level `snap_strike` callers.** Only the strategies file
+     was migrated to `chain_strike`. Three other call sites still use
+     arithmetic:
+       - `backend/bot/engine.py:1526`
+       - `backend/bot/ai/brain.py:19`
+       - `backend/bot/options_chain/__init__.py:29`
+     Each needs a careful look — they may have different intent than
+     strategies (e.g. brain.py might be using it for prompt-time
+     description rather than order-placement). Migrate per file with
+     visible diff and per-caller test.
+
+---
+
+## Project-specific Python conventions seen this session
+
+  - Module-level `_CACHE: Dict[str, tuple] = {}` with TTL from
+    TUNABLES — the canonical pattern for cheap in-process caches.
+  - `from __future__ import annotations` at top of every file.
+  - Logger via `logger = logging.getLogger(__name__)`.
+  - Provider-chain pattern: ordered list of (name, fn) tuples; first
+    non-None wins; each fn returns same dict shape or None on failure.
+  - Tests in `tests/unit/test_*.py`, mock external deps via
+    `monkeypatch.setattr`, never hit real network.
+  - Config tunables live in `backend.config.TUNABLES` (dataclass-ish);
+    env vars override TUNABLES when both are set.

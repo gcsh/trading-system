@@ -1,0 +1,86 @@
+# --- secrets / credentials (CRITICAL — never commit) ---
+.env
+.env.local
+.env.*.local
+*.token
+*.key
+*.pem
+*.cred
+*.credentials
+credentials*
+secrets*
+.aws/
+.ssh/
+
+# --- python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+
+# --- node / frontend build ---
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# --- databases / state ---
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+trading_bot.db*
+paper.db*
+state/
+
+# --- deploy / build artifacts ---
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+deploy-*.zip
+.backups/
+backups/
+dist/
+build/
+
+# --- data / cache (do not commit ingested market data) ---
+data/
+data_lake/
+.cache/
+.local-cache/
+*.parquet
+*.duckdb
+
+# --- logs / runtime ---
+*.log
+logs/
+nohup.out
+*.pid
+
+# --- IDE / OS ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# --- Playwright / test outputs ---
+test-results/
+playwright-report/
+playwright/.cache/
+
+# --- ad hoc scratch ---
+scratch/
+tmp/
+temp/

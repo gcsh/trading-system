@@ -1,0 +1,11 @@
+{
+  "version": "20260611-010512-hist_gb",
+  "model_type": "hist_gb",
+  "calibration": null,
+  "trained_at": "2026-06-11T01:05:12",
+  "rows_trained": 90,
+  "cv_brier": null,
+  "cv_calibration_error": null,
+  "notes": "explain-test",
+  "artifact_path": "./ml/registry/20260611-010512-hist_gb.pkl"
+}

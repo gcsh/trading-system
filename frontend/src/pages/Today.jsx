@@ -1,0 +1,40 @@
+/**
+ * Today — the operator's home page.
+ *
+ * Single answer to "what's the bot doing right now?" + "can I trust it?".
+ * Composes existing CommandCenter sections plus a Money strip (equity
+ * curve + performance metrics) at the top, replacing the old Portfolio /
+ * Desk / Command Center scatter.
+ */
+import React from 'react';
+import { useOutletContext } from 'react-router-dom';
+import CommandCenter from './CommandCenter.jsx';
+import EquityCurve from '../components/EquityCurve.jsx';
+import PerformancePanel from '../components/PerformancePanel.jsx';
+import RegimeBanner from '../components/RegimeBanner.jsx';
+// Feature-Merge F1 — surface the Phase 18-FU smoking-gun funnel finding
+// on the ORIGINAL Today page. Both components are driven by the
+// canonical useFunnel hook (hooks/swr/useFunnel.js) so every consumer
+// of /learning/funnel sees the same numbers.
+import ThroughputAlertBanner from '../components/ThroughputAlertBanner.jsx';
+import FunnelSummaryPanel from '../components/FunnelSummaryPanel.jsx';
+
+export default function Today() {
+  const { equity, performance } = useOutletContext();
+  return (
+    <>
+      <ThroughputAlertBanner />
+      <RegimeBanner />
+      <div className="grid" style={{ marginBottom: 18 }}>
+        <div className="col-8" style={{ minWidth: 0 }}>
+          <EquityCurve data={equity} />
+        </div>
+        <div className="col-4" style={{ minWidth: 0 }}>
+          <PerformancePanel performance={performance} />
+        </div>
+      </div>
+      <FunnelSummaryPanel />
+      <CommandCenter />
+    </>
+  );
+}

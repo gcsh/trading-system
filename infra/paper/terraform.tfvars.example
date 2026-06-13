@@ -1,0 +1,18 @@
+################################################################
+# Copy to terraform.tfvars and edit. terraform.tfvars is gitignored.
+# All defaults are reasonable; only override what you need.
+################################################################
+
+# region              = "us-east-1"
+# instance_type       = "t4g.small"
+# ebs_size_gb         = 20
+# log_retention_days  = 30
+
+# Flip this to true ONLY when you're ready to deploy the app. Until
+# then, leave it false to save ~$12/month.
+# create_compute = false
+
+# By default, no inbound SSH is allowed; you access the box via
+# AWS SSM Session Manager (`aws ssm start-session --target i-xxx`).
+# If you want plain SSH from a specific IP, uncomment + edit:
+# allowed_ssh_cidrs = ["YOUR.HOME.IP/32"]

@@ -1,0 +1,43 @@
+name: iron_condor
+label: "Iron Condor"
+direction: neutral
+category: defined_risk
+
+requires_regime:
+  trend: [choppy]
+  intraday_regime:
+    not_in: [panic, capitulation, trending_up, trending_down]
+requires_iv_rank_range: [40, 90]
+requires_dte_range: [21, 45]
+requires_gamma_state:
+  not: short_gamma
+
+legs:
+  - side: short_call
+    delta_target: 0.20
+  - side: long_call
+    delta_target: 0.10
+  - side: short_put
+    delta_target: 0.20
+  - side: long_put
+    delta_target: 0.10
+
+max_loss_calculation: wing_width_minus_net_credit
+
+edge_keys:
+  - {pattern: composite_value_area,  regime: choppy, vol_state: __ANY__}
+  - {pattern: poc_retest,            regime: choppy, vol_state: __ANY__}
+  - {pattern: value_area_rejection,  regime: choppy, vol_state: __ANY__}
+  - {pattern: pennant,               regime: choppy, vol_state: __ANY__}
+  - {pattern: iv_compression,        regime: choppy, vol_state: __ANY__}
+
+scoring_weights:
+  pattern_alignment: 0.25
+  regime_alignment: 0.35
+  iv_alignment: 0.30
+  analog_support: 0.10
+
+invalidation_default:
+  - "Underlying breaches either short-leg strike"
+  - "ADX rises above 25 — market starts trending"
+  - "Dealer regime flips short-gamma — moves get amplified"

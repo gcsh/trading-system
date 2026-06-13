@@ -1,0 +1,39 @@
+name: call_debit_spread
+label: "Call Debit Spread"
+direction: long
+category: defined_risk
+
+requires_regime:
+  trend: [bullish]
+  intraday_regime:
+    not_in: [panic, capitulation]
+requires_iv_rank_range: [0, 55]
+requires_dte_range: [21, 45]
+requires_gamma_state:
+  not: short_gamma
+
+legs:
+  - side: long_call
+    delta_target: 0.50
+  - side: short_call
+    delta_target: 0.25
+
+max_loss_calculation: net_debit_paid
+
+edge_keys:
+  - {pattern: vwap_reclaim,         regime: trending_up, vol_state: __ANY__}
+  - {pattern: order_block,          regime: trending_up, vol_state: __ANY__}
+  - {pattern: breakout,             regime: trending_up, vol_state: __ANY__}
+  - {pattern: fair_value_gap,       regime: trending_up, vol_state: __ANY__}
+  - {pattern: wyckoff_spring,       regime: trending_up, vol_state: __ANY__}
+
+scoring_weights:
+  pattern_alignment: 0.30
+  regime_alignment: 0.30
+  iv_alignment: 0.25
+  analog_support: 0.15
+
+invalidation_default:
+  - "Underlying closes below long-leg strike"
+  - "Trend flips bearish before expiry"
+  - "IV crush before move materializes"

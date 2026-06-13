@@ -1,0 +1,40 @@
+name: bear_call_spread
+label: "Bear Call Spread"
+direction: short
+category: defined_risk
+
+requires_regime:
+  trend: [bearish]
+  intraday_regime:
+    not_in: [panic, capitulation]
+requires_iv_rank_range: [25, 70]
+requires_dte_range: [21, 45]
+requires_gamma_state:
+  not: short_gamma
+
+legs:
+  - side: short_call
+    delta_target: 0.30
+  - side: long_call
+    delta_target: 0.15
+
+max_loss_calculation: spread_width_minus_credit
+
+edge_keys:
+  - {pattern: vwap_rejection,              regime: trending_down, vol_state: __ANY__}
+  - {pattern: wyckoff_distribution_phase,  regime: trending_down, vol_state: __ANY__}
+  - {pattern: talib_evening_star,          regime: trending_down, vol_state: __ANY__}
+  - {pattern: failed_breakout,             regime: trending_down, vol_state: __ANY__}
+  - {pattern: talib_dark_cloud_cover,      regime: trending_down, vol_state: __ANY__}
+  - {pattern: bear_flag,                   regime: trending_down, vol_state: __ANY__}
+
+scoring_weights:
+  pattern_alignment: 0.30
+  regime_alignment: 0.30
+  iv_alignment: 0.25
+  analog_support: 0.15
+
+invalidation_default:
+  - "Underlying closes above short-leg strike"
+  - "Volatility regime expands to high"
+  - "Dealer regime flips short-gamma — squeeze risk"
