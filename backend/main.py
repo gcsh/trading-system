@@ -464,7 +464,27 @@ def create_app() -> FastAPI:
     # at the top of ``create_app`` so the conflict-fallback middleware can
     # share it.
     if dist_dir.exists():
-        app.mount("/assets", StaticFiles(directory=dist_dir / "assets"), name="assets")
+        # Custom StaticFiles that stamps far-future Cache-Control on every
+        # response. Vite emits content-hashed filenames under /assets/
+        # (e.g. vendor-charts-BzYXNOPM.js), so the same URL always returns
+        # identical bytes — the textbook case for ``immutable``. Both the
+        # browser AND Cloudflare's edge will cache for a year without
+        # revalidation, eliminating the 304 round-trip per chunk per nav.
+        #
+        # Middleware-based stamping doesn't work for mounted StaticFiles
+        # apps because their FileResponse streams begin before parent
+        # middleware can amend headers — we have to set them inside the
+        # response builder itself.
+        class _ImmutableStaticFiles(StaticFiles):
+            async def get_response(self, path: str, scope):  # type: ignore[override]
+                response = await super().get_response(path, scope)
+                if 200 <= response.status_code < 400:
+                    response.headers["Cache-Control"] = (
+                        "public, max-age=31536000, immutable"
+                    )
+                return response
+
+        app.mount("/assets", _ImmutableStaticFiles(directory=dist_dir / "assets"), name="assets")
 
         @app.get("/", response_class=HTMLResponse)
         async def index() -> str:
