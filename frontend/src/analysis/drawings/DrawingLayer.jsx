@@ -332,8 +332,39 @@ export default function DrawingLayer({
     if (moved > DRAG_THRESHOLD_PX) return;
 
     if (isWired) {
-      // Defer to the original collect-new-shape flow.
-      handleDrawClick(evt);
+      // Inlined draw-click flow so the closure sees the live
+      // activeTool / collecting / addShape (D.4 stale-closure fix).
+      const data = pixelToData(evt.clientX, evt.clientY);
+      if (!data) return;
+      const tool = DRAWING_TOOLS[activeTool];
+      if (!tool) return;
+
+      if (activeTool === 'text') {
+        // eslint-disable-next-line no-alert
+        const txt = globalThis.prompt('Note text:', '');
+        if (txt) {
+          addShape({
+            tool: 'text',
+            points: [{ time: data.time, price: data.price }],
+            style: { color: DEFAULT_STYLE.color, text: txt, fontSize: 12 },
+          });
+        }
+        if (onToolReset) onToolReset();
+        return;
+      }
+
+      const next = collecting && collecting.tool === activeTool
+        ? { ...collecting, points: [...collecting.points,
+            { time: data.time, price: data.price }] }
+        : { tool: activeTool, points: [{ time: data.time, price: data.price }] };
+
+      if (next.points.length >= tool.pointCount) {
+        addShape({ tool: next.tool, points: next.points });
+        setCollecting(null);
+        if (onToolReset) onToolReset();
+      } else {
+        setCollecting(next);
+      }
       return;
     }
 
@@ -342,42 +373,8 @@ export default function DrawingLayer({
       chartRefs.chart, chartRefs.candleSeries,
       cv.width, cv.height);
     setSelectedId(hit ? hit.id : null);
-  }, [clientToCanvas, isWired, shapes, chartRefs, setSelectedId, updateShape]);
-
-  const handleDrawClick = useCallback((evt) => {
-    if (!isWired) return;
-    const data = pixelToData(evt.clientX, evt.clientY);
-    if (!data) return;
-    const tool = DRAWING_TOOLS[activeTool];
-    if (!tool) return;
-
-    if (activeTool === 'text') {
-      // eslint-disable-next-line no-alert
-      const txt = globalThis.prompt('Note text:', '');
-      if (txt) {
-        addShape({
-          tool: 'text',
-          points: [{ time: data.time, price: data.price }],
-          style: { color: DEFAULT_STYLE.color, text: txt, fontSize: 12 },
-        });
-      }
-      if (onToolReset) onToolReset();
-      return;
-    }
-
-    const next = collecting && collecting.tool === activeTool
-      ? { ...collecting, points: [...collecting.points,
-          { time: data.time, price: data.price }] }
-      : { tool: activeTool, points: [{ time: data.time, price: data.price }] };
-
-    if (next.points.length >= tool.pointCount) {
-      addShape({ tool: next.tool, points: next.points });
-      setCollecting(null);
-      if (onToolReset) onToolReset();
-    } else {
-      setCollecting(next);
-    }
-  }, [activeTool, collecting, isWired, pixelToData, addShape, onToolReset]);
+  }, [clientToCanvas, isWired, shapes, chartRefs, setSelectedId, updateShape,
+    activeTool, collecting, pixelToData, addShape, onToolReset]);
 
   const onMouseLeave = useCallback(() => setHoverPx(null), []);
 
@@ -458,6 +455,50 @@ export default function DrawingLayer({
     setColorPickerOpen(false);
   }, [selectedId, updateShape]);
 
+  // ── Click-through for chart pan/zoom ────────────────────────────
+  // When in cursor mode with no selection, the overlay must NOT capture
+  // pointer events — otherwise lightweight-charts' wheel-zoom and
+  // drag-pan are dead. We still need shapes to be visually clickable to
+  // select them, so we attach a click listener to the container that
+  // fires AFTER the chart has processed the event. Selecting flips the
+  // canvas's pointer-events back to auto so handle-drag works.
+  useEffect(() => {
+    if (!ready) return undefined;
+    const el = chartRefs.container;
+    const onContainerClick = (e) => {
+      if (isWired || selectedId) return;
+      const cv = canvasRef.current;
+      if (!cv) return;
+      const r = cv.getBoundingClientRect();
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
+      if (x < 0 || y < 0 || x > r.width || y > r.height) return;
+      const hit = findHitShape(shapes, x, y, chartRefs.chart,
+        chartRefs.candleSeries, cv.width, cv.height);
+      if (hit) setSelectedId(hit.id);
+    };
+    const onContainerContext = (e) => {
+      if (isWired) return;
+      const cv = canvasRef.current;
+      if (!cv) return;
+      const r = cv.getBoundingClientRect();
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
+      const hit = findHitShape(shapes, x, y, chartRefs.chart,
+        chartRefs.candleSeries, cv.width, cv.height);
+      if (hit) {
+        e.preventDefault();
+        removeShape(hit.id);
+      }
+    };
+    el.addEventListener('click', onContainerClick);
+    el.addEventListener('contextmenu', onContainerContext);
+    return () => {
+      el.removeEventListener('click', onContainerClick);
+      el.removeEventListener('contextmenu', onContainerContext);
+    };
+  }, [ready, isWired, selectedId, shapes, chartRefs, setSelectedId, removeShape]);
+
   // ── Render ──────────────────────────────────────────────────────
   if (!ready) return null;
   const cursor = isWired
@@ -481,11 +522,14 @@ export default function DrawingLayer({
           inset: 0,
           width: '100%',
           height: '100%',
-          // Always intercept pointer events when a wired tool OR a
-          // selected shape exists. In pure cursor + no selection mode,
-          // pass through so the chart's own crosshair/pan works.
-          pointerEvents: (isWired || selectedId || shapes.length > 0)
-            ? 'auto' : 'none',
+          // Intercept pointer events ONLY when:
+          //   • a wired tool is active (we're drawing), OR
+          //   • a shape is currently selected (handle / body drag).
+          // In cursor mode with no selection we MUST pass through so
+          // lightweight-charts' wheel-zoom + drag-pan work. The
+          // container-level click listener above still catches taps on
+          // shapes for selection.
+          pointerEvents: (isWired || selectedId) ? 'auto' : 'none',
           cursor,
           zIndex: 6,
         }}
