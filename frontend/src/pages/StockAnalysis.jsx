@@ -1341,6 +1341,7 @@ export default function StockAnalysis() {
                         <DrawingLayer
                           chartRefs={chartRefs}
                           activeTool={drawingTool}
+                          setActiveTool={setDrawingTool}
                           shapes={drawings}
                           selectedId={selectedDrawingId}
                           setSelectedId={setSelectedDrawingId}

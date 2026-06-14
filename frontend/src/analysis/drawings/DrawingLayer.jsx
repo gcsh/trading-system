@@ -1,29 +1,41 @@
 /**
- * Drawing overlay — select / drag / delete restored.
+ * Drawing overlay — full rewrite.
  *
- *   • In `cursor` mode the canvas is `pointerEvents: none` so chart
- *     pan/zoom work normally. A capture-phase pointerdown listener on
- *     the chart container hit-tests shapes BEFORE lightweight-charts
- *     sees the event. A hit -> stopPropagation + start a drag (handle
- *     drag if a handle, body drag otherwise). A miss -> deselect and
- *     let the chart pan.
+ * Architecture (one model, no surprises):
  *
- *   • In a wired drawing tool (trendline, fib, etc.) canvas is
- *     `pointerEvents: auto` and the existing onClick collector runs.
- *     Tool stays active until the operator picks Cursor.
+ *   1. The canvas is paint-only. `pointerEvents: 'none'` ALWAYS so the
+ *      chart receives pan/zoom on every empty-space gesture.
  *
- *   • Drag preview uses silent `updateShape` writes so undo isn't
- *     polluted. On pointerup we silently rollback to the original
- *     points, then commit the final state non-silently so a single
- *     pre-drag snapshot lands in the past stack.
+ *   2. All input flows through a single capture-phase pointerdown
+ *      listener on the chart container, which fires BEFORE
+ *      lightweight-charts' own listeners and stopPropagation()'s when
+ *      it wants to claim the gesture.
  *
- *   • Selected shape gets a halo + handle dots painted on the canvas
- *     and a floating chip (delete / duplicate / color / deselect)
- *     rendered as an HTML overlay.
+ *   3. AUTO-RESET: a wired drawing tool finalizes one shape, then we
+ *      flip back to `cursor` automatically. No more accidental lines
+ *      from each subsequent click — the old "tool stays active" model
+ *      was the reason the canvas filled with stray trendlines.
  *
- *   • Right-click on a shape still deletes via the container-level
- *     contextmenu listener. Backspace/Delete removes the selected
- *     shape from the keyboard.
+ *   4. Cursor mode is the editing mode. Click on a handle of the
+ *      selected shape -> drag that endpoint. Click on the body of any
+ *      shape -> select + start a body drag. Click on empty space ->
+ *      deselect and the chart pans.
+ *
+ *   5. Drag preview writes points silently. On pointerup with motion
+ *      we silently rollback to the pre-drag points, then write the
+ *      final state non-silently so undo records exactly one entry.
+ *
+ *   6. Right-click on any shape deletes it. Backspace / Delete removes
+ *      the selection. Esc cancels in-progress collection or deselects.
+ *
+ * Props:
+ *   chartRefs       {chart, candleSeries, container}
+ *   activeTool      slug from DRAWING_TOOLS
+ *   setActiveTool   parent's setter (used for auto-reset)
+ *   shapes          array of {id, tool, points:[{time,price},...], style}
+ *   selectedId / setSelectedId
+ *   addShape / removeShape / updateShape / duplicateShape
+ *   undo / redo
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { DRAWING_TOOLS, DEFAULT_STYLE } from './tools.js';
@@ -33,9 +45,9 @@ const WIRED_TOOLS = new Set([
   'ray', 'extended_line', 'vertical', 'channel', 'pitchfork', 'fib_extension',
 ]);
 
-const HANDLE_R = 5;       // painted radius
-const HANDLE_HIT = 10;    // hit radius
-const DRAG_THRESHOLD = 3; // pixels of motion before we call it a drag
+const HANDLE_PAINT = 5;   // visible radius
+const HANDLE_HIT = 12;    // hit radius (loose, easy to grab)
+const DRAG_THRESHOLD = 3; // px of motion before we treat it as a drag
 
 const SWATCHES = ['#5fc9ce', '#ffd166', '#e8606e', '#a78bfa', '#e6edf3'];
 
@@ -45,14 +57,12 @@ const CHIP_BTN = {
   color: '#e6edf3',
   cursor: 'pointer',
   fontSize: 12,
-  padding: '2px 5px',
+  fontWeight: 600,
+  padding: '4px 8px',
   lineHeight: 1,
   borderRadius: 4,
 };
 
-// lightweight-charts coordinateToTime returns `Time = number |
-// BusinessDay | string`. Normalize to unix seconds so the shape
-// storage is always numeric.
 function timeToUnix(t) {
   if (t == null) return 0;
   if (typeof t === 'number') return t;
@@ -82,6 +92,7 @@ function shapeToPixels(shape, chart, candleSeries) {
 export default function DrawingLayer({
   chartRefs,
   activeTool,
+  setActiveTool,
   shapes,
   selectedId,
   setSelectedId,
@@ -93,24 +104,25 @@ export default function DrawingLayer({
   redo,
 }) {
   const canvasRef = useRef(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
   const [collecting, setCollecting] = useState(null);
   const [hoverPx, setHoverPx] = useState(null);
-  const [size, setSize] = useState({ w: 0, h: 0 });
   const [chipPos, setChipPos] = useState(null);
 
-  // Refs so the container-level pointerdown listener never has to
-  // re-attach when shapes / selectedId / activeTool tick.
+  // Refs so the long-lived container listeners don't have to re-attach
+  // every render.
   const shapesRef = useRef(shapes);
   shapesRef.current = shapes;
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
   const activeToolRef = useRef(activeTool);
   activeToolRef.current = activeTool;
+  const collectingRef = useRef(collecting);
+  collectingRef.current = collecting;
   const chipPosRef = useRef(null);
 
   const ready = !!(chartRefs && chartRefs.chart && chartRefs.candleSeries
     && chartRefs.container);
-  const isWired = WIRED_TOOLS.has(activeTool);
   const selectedShape = selectedId
     ? (shapes || []).find((s) => s.id === selectedId) : null;
 
@@ -128,14 +140,17 @@ export default function DrawingLayer({
     return () => ro.disconnect();
   }, [ready, chartRefs]);
 
-  // ── Clear selection when leaving cursor mode ────────────────────
+  // ── Switching tool resets in-progress collection. Switching AWAY
+  //    from cursor also clears the selection so handles don't bleed
+  //    into the wired-tool UX. ───────────────────────────────────────
   useEffect(() => {
     if (activeTool !== 'cursor' && selectedIdRef.current && setSelectedId) {
       setSelectedId(null);
     }
+    setCollecting((cur) => (cur && cur.tool !== activeTool ? null : cur));
   }, [activeTool, setSelectedId]);
 
-  // ── Repaint ─────────────────────────────────────────────────────
+  // ── Paint ───────────────────────────────────────────────────────
   const repaint = useCallback(() => {
     const cv = canvasRef.current;
     if (!cv || !ready) return;
@@ -164,7 +179,7 @@ export default function DrawingLayer({
         ctx.fillStyle = '#0d111f';
         for (const p of px) {
           ctx.beginPath();
-          ctx.arc(p.x, p.y, HANDLE_R, 0, Math.PI * 2);
+          ctx.arc(p.x, p.y, HANDLE_PAINT, 0, Math.PI * 2);
           ctx.fill();
           ctx.stroke();
         }
@@ -213,6 +228,7 @@ export default function DrawingLayer({
     }
   }, [shapes, collecting, hoverPx, chartRefs, ready, selectedId]);
 
+  // Repaint on scale change (pan/zoom) and on resize.
   useEffect(() => {
     if (!ready) return undefined;
     const ts = chartRefs.chart.timeScale();
@@ -231,72 +247,20 @@ export default function DrawingLayer({
 
   useEffect(() => { repaint(); }, [repaint, size]);
 
-  // ── Reset in-progress collection on tool change ─────────────────
-  useEffect(() => {
-    setCollecting((cur) => (cur && cur.tool !== activeTool ? null : cur));
-  }, [activeTool]);
-
-  // ── Wired-tool click → collect points ───────────────────────────
-  const onClick = useCallback((evt) => {
-    if (!isWired) return;
-    const cv = canvasRef.current;
-    if (!cv) return;
-    const r = cv.getBoundingClientRect();
-    const x = evt.clientX - r.left;
-    const y = evt.clientY - r.top;
-    const rawTime = chartRefs.chart.timeScale().coordinateToTime(x);
-    const price = chartRefs.candleSeries.coordinateToPrice(y);
-    if (rawTime == null || price == null) return;
-    const time = timeToUnix(rawTime);
-    if (!Number.isFinite(time) || time <= 0) return;
-
-    const tool = DRAWING_TOOLS[activeTool];
-    if (!tool) return;
-
-    if (activeTool === 'text') {
-      // eslint-disable-next-line no-alert
-      const txt = globalThis.prompt('Note text:', '');
-      if (txt) {
-        addShape({
-          tool: 'text',
-          points: [{ time, price }],
-          style: { color: DEFAULT_STYLE.color, text: txt, fontSize: 12 },
-        });
-      }
-      return;
-    }
-
-    const next = collecting && collecting.tool === activeTool
-      ? { ...collecting, points: [...collecting.points, { time, price }] }
-      : { tool: activeTool, points: [{ time, price }] };
-
-    if (next.points.length >= tool.pointCount) {
-      addShape({ tool: next.tool, points: next.points });
-      setCollecting(null);
-    } else {
-      setCollecting(next);
-    }
-  }, [activeTool, collecting, isWired, chartRefs, addShape]);
-
-  const onMouseMove = useCallback((evt) => {
-    if (!isWired) {
-      if (hoverPx) setHoverPx(null);
-      return;
-    }
-    const cv = canvasRef.current;
-    if (!cv) return;
-    const r = cv.getBoundingClientRect();
-    setHoverPx({ x: evt.clientX - r.left, y: evt.clientY - r.top });
-  }, [isWired, hoverPx]);
-
-  const onMouseLeave = useCallback(() => setHoverPx(null), []);
-
-  // ── Cursor-mode selection + drag + right-click delete ───────────
+  // ── One container listener handles every input gesture ──────────
   useEffect(() => {
     if (!ready) return undefined;
     const el = chartRefs.container;
 
+    // Active drag state (point or body). Plain object owned by the
+    // closure; cleared on pointerup.
     const drag = { active: false };
+
+    const cleanupDrag = () => {
+      drag.active = false;
+      globalThis.removeEventListener('pointermove', onMove);
+      globalThis.removeEventListener('pointerup', onUp);
+    };
 
     const onMove = (e) => {
       if (!drag.active) return;
@@ -313,6 +277,7 @@ export default function DrawingLayer({
           return;
         }
       }
+      if (!updateShape) return;
 
       const ts = chartRefs.chart.timeScale();
       const candleSeries = chartRefs.candleSeries;
@@ -322,7 +287,6 @@ export default function DrawingLayer({
         const newPrice = candleSeries.coordinateToPrice(y);
         if (!Number.isFinite(newTime) || newTime <= 0
             || newPrice == null) return;
-        if (!updateShape) return;
         updateShape(drag.id, (s) => {
           const points = s.points.map((p, i) =>
             i === drag.pointIdx
@@ -339,7 +303,6 @@ export default function DrawingLayer({
             || p0 == null || p1 == null) return;
         const dt = t1 - t0;
         const dp = p1 - p0;
-        if (!updateShape) return;
         updateShape(drag.id, (s) => ({
           ...s,
           points: drag.originalPoints.map((p) => ({
@@ -356,8 +319,8 @@ export default function DrawingLayer({
         if (finalShape) {
           const finalPts = finalShape.points.map((p) => ({ ...p }));
           const origPts = drag.originalPoints;
-          // Rollback silently so the next non-silent write records the
-          // pre-drag snapshot in the past stack.
+          // Silent rollback then non-silent final write so undo records
+          // exactly one snapshot (the pre-drag state).
           updateShape(drag.id, (s) => ({ ...s, points: origPts }),
             { silent: true });
           setTimeout(() => {
@@ -365,25 +328,73 @@ export default function DrawingLayer({
           }, 0);
         }
       }
-      drag.active = false;
-      globalThis.removeEventListener('pointermove', onMove);
-      globalThis.removeEventListener('pointerup', onUp);
+      cleanupDrag();
     };
 
     const onDown = (e) => {
-      if (e.button !== 0) return;
-      if (activeToolRef.current !== 'cursor') return;
+      if (e.button !== 0) return;            // only left-click
       const cv = canvasRef.current;
       if (!cv) return;
       const r = cv.getBoundingClientRect();
       const x = e.clientX - r.left;
       const y = e.clientY - r.top;
       const view = { width: cv.width, height: cv.height };
+      const tool = activeToolRef.current;
+
+      // ── Wired drawing tool: collect a point ─────────────────────
+      if (WIRED_TOOLS.has(tool)) {
+        e.stopPropagation();
+        e.preventDefault();
+        const ts = chartRefs.chart.timeScale();
+        const rawTime = ts.coordinateToTime(x);
+        const price = chartRefs.candleSeries.coordinateToPrice(y);
+        if (rawTime == null || price == null) return;
+        const time = timeToUnix(rawTime);
+        if (!Number.isFinite(time) || time <= 0) return;
+
+        const def = DRAWING_TOOLS[tool];
+        if (!def) return;
+
+        if (tool === 'text') {
+          // eslint-disable-next-line no-alert
+          const txt = globalThis.prompt('Note text:', '');
+          if (txt) {
+            addShape({
+              tool: 'text',
+              points: [{ time, price }],
+              style: { color: DEFAULT_STYLE.color, text: txt, fontSize: 12 },
+            });
+          }
+          // Auto-reset to cursor so the next click doesn't drop more
+          // notes. This is the single most important behavior change.
+          if (setActiveTool) setActiveTool('cursor');
+          setCollecting(null);
+          return;
+        }
+
+        const cur = collectingRef.current;
+        const next = cur && cur.tool === tool
+          ? { ...cur, points: [...cur.points, { time, price }] }
+          : { tool, points: [{ time, price }] };
+
+        if (next.points.length >= def.pointCount) {
+          addShape({ tool: next.tool, points: next.points });
+          setCollecting(null);
+          // Auto-reset to cursor. No more runaway clicks creating
+          // extra lines.
+          if (setActiveTool) setActiveTool('cursor');
+        } else {
+          setCollecting(next);
+        }
+        return;
+      }
+
+      // ── Cursor mode: handle drag, body drag, or deselect ────────
       const currentShapes = shapesRef.current || [];
       const curSel = selectedIdRef.current;
 
-      // 1) Handles of the currently-selected shape get priority so
-      //    you can grab an endpoint that overlaps another shape.
+      // (1) Handle of the currently-selected shape — priority hit so
+      //     an endpoint overlapping other lines is still grabbable.
       if (curSel) {
         const s = currentShapes.find((sh) => sh.id === curSel);
         if (s) {
@@ -392,8 +403,7 @@ export default function DrawingLayer({
             for (let i = 0; i < px.length; i += 1) {
               const ddx = px[i].x - x;
               const ddy = px[i].y - y;
-              if (ddx * ddx + ddy * ddy
-                  <= HANDLE_HIT * HANDLE_HIT) {
+              if (ddx * ddx + ddy * ddy <= HANDLE_HIT * HANDLE_HIT) {
                 e.stopPropagation();
                 e.preventDefault();
                 drag.active = true;
@@ -413,14 +423,14 @@ export default function DrawingLayer({
         }
       }
 
-      // 2) Body hit on ANY shape (newest-first so the topmost wins).
+      // (2) Any shape body — newest first so topmost wins.
       for (let i = currentShapes.length - 1; i >= 0; i -= 1) {
         const s = currentShapes[i];
-        const tool = DRAWING_TOOLS[s.tool];
-        if (!tool) continue;
+        const def = DRAWING_TOOLS[s.tool];
+        if (!def) continue;
         const px = shapeToPixels(s, chartRefs.chart, chartRefs.candleSeries);
         if (!px) continue;
-        if (tool.hitTest(px, x, y, view, s.style)) {
+        if (def.hitTest(px, x, y, view, s.style)) {
           e.stopPropagation();
           e.preventDefault();
           if (setSelectedId) setSelectedId(s.id);
@@ -437,8 +447,29 @@ export default function DrawingLayer({
         }
       }
 
-      // 3) Empty space → deselect, let the chart handle pan.
+      // (3) Empty space → deselect, do NOT stopPropagation so the
+      //     chart receives the gesture and pans normally.
       if (curSel && setSelectedId) setSelectedId(null);
+    };
+
+    // Hover preview while collecting; also drives the rubber-band line
+    // before the second click lands.
+    const onHoverMove = (e) => {
+      const tool = activeToolRef.current;
+      if (!WIRED_TOOLS.has(tool)) {
+        if (chipPosRef.current === null) return;
+        // collecting was reset elsewhere; nothing to do
+      }
+      const cv = canvasRef.current;
+      if (!cv) return;
+      const r = cv.getBoundingClientRect();
+      // Only update hoverPx when a wired tool is active so paint
+      // doesn't churn during pure pan/zoom.
+      if (WIRED_TOOLS.has(tool)) {
+        setHoverPx({ x: e.clientX - r.left, y: e.clientY - r.top });
+      } else if (hoverPx) {
+        setHoverPx(null);
+      }
     };
 
     const onContext = (e) => {
@@ -451,27 +482,31 @@ export default function DrawingLayer({
       const currentShapes = shapesRef.current || [];
       for (let i = currentShapes.length - 1; i >= 0; i -= 1) {
         const s = currentShapes[i];
-        const tool = DRAWING_TOOLS[s.tool];
-        if (!tool) continue;
+        const def = DRAWING_TOOLS[s.tool];
+        if (!def) continue;
         const px = shapeToPixels(s, chartRefs.chart, chartRefs.candleSeries);
         if (!px) continue;
-        if (tool.hitTest(px, x, y, view, s.style)) {
+        if (def.hitTest(px, x, y, view, s.style)) {
           e.preventDefault();
-          removeShape(s.id);
+          if (removeShape) removeShape(s.id);
           return;
         }
       }
     };
 
     el.addEventListener('pointerdown', onDown, true);
+    el.addEventListener('pointermove', onHoverMove);
     el.addEventListener('contextmenu', onContext);
     return () => {
       el.removeEventListener('pointerdown', onDown, true);
+      el.removeEventListener('pointermove', onHoverMove);
       el.removeEventListener('contextmenu', onContext);
       globalThis.removeEventListener('pointermove', onMove);
       globalThis.removeEventListener('pointerup', onUp);
     };
-  }, [ready, chartRefs, setSelectedId, updateShape, removeShape]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, chartRefs, setActiveTool, setSelectedId,
+    addShape, updateShape, removeShape]);
 
   // ── Keyboard ────────────────────────────────────────────────────
   useEffect(() => {
@@ -484,28 +519,32 @@ export default function DrawingLayer({
 
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
-        if (e.shiftKey) redo(); else undo();
+        if (e.shiftKey) redo && redo(); else undo && undo();
         return;
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y') {
         e.preventDefault();
-        redo();
+        redo && redo();
         return;
       }
       if (e.key === 'Escape') {
-        if (collecting) setCollecting(null);
-        else if (selectedIdRef.current && setSelectedId) setSelectedId(null);
+        if (collectingRef.current) {
+          setCollecting(null);
+          if (setActiveTool) setActiveTool('cursor');
+        } else if (selectedIdRef.current && setSelectedId) {
+          setSelectedId(null);
+        }
         return;
       }
       if ((e.key === 'Backspace' || e.key === 'Delete')
-          && selectedIdRef.current) {
+          && selectedIdRef.current && removeShape) {
         e.preventDefault();
         removeShape(selectedIdRef.current);
       }
     };
     globalThis.addEventListener('keydown', onKey);
     return () => globalThis.removeEventListener('keydown', onKey);
-  }, [collecting, undo, redo, removeShape, setSelectedId]);
+  }, [undo, redo, removeShape, setSelectedId, setActiveTool]);
 
   if (!ready) return null;
 
@@ -516,19 +555,14 @@ export default function DrawingLayer({
         width={Math.max(1, size.w)}
         height={Math.max(1, size.h)}
         data-testid="analysis-drawing-canvas"
-        onClick={onClick}
-        onMouseMove={onMouseMove}
-        onMouseLeave={onMouseLeave}
         style={{
           position: 'absolute',
           inset: 0,
           width: '100%',
           height: '100%',
-          // Wired tool → grab clicks here. Cursor mode → let them
-          // through to the chart; selection is captured at container
-          // level so chart pan/zoom still fire on empty-space clicks.
-          pointerEvents: isWired ? 'auto' : 'none',
-          cursor: isWired ? 'crosshair' : 'default',
+          // Paint-only. Every input gesture routes through the
+          // container-level capture-phase listener above.
+          pointerEvents: 'none',
           zIndex: 6,
         }}
       />
@@ -537,19 +571,18 @@ export default function DrawingLayer({
           data-testid="analysis-drawing-chip"
           style={{
             position: 'absolute',
-            left: Math.max(2, Math.min(size.w - 200, chipPos.x + 10)),
-            top: Math.max(2, chipPos.y - 32),
+            left: Math.max(4, Math.min(size.w - 260, chipPos.x + 12)),
+            top: Math.max(4, chipPos.y - 38),
             zIndex: 8,
             display: 'flex',
             alignItems: 'center',
             gap: 4,
-            background: 'rgba(13, 17, 31, 0.96)',
-            border: '1px solid rgba(255, 209, 102, 0.55)',
+            background: 'rgba(13, 17, 31, 0.97)',
+            border: '1px solid rgba(255, 209, 102, 0.65)',
             borderRadius: 6,
             padding: '3px 5px',
             pointerEvents: 'auto',
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
-            fontSize: 12,
+            boxShadow: '0 6px 18px rgba(0, 0, 0, 0.55)',
             userSelect: 'none',
           }}
         >
@@ -557,7 +590,7 @@ export default function DrawingLayer({
             type="button"
             title="Delete (Backspace)"
             data-testid="analysis-drawing-delete"
-            onClick={() => removeShape(selectedShape.id)}
+            onClick={() => removeShape && removeShape(selectedShape.id)}
             style={{ ...CHIP_BTN, color: '#e8606e' }}
           >Delete</button>
           {duplicateShape && (
@@ -570,7 +603,7 @@ export default function DrawingLayer({
             >Dup</button>
           )}
           <span style={{
-            display: 'inline-flex', gap: 3, marginLeft: 2,
+            display: 'inline-flex', gap: 3, marginLeft: 2, marginRight: 2,
           }}>
             {SWATCHES.map((c) => (
               <button
@@ -581,7 +614,7 @@ export default function DrawingLayer({
                   (s) => ({ ...s, style: { ...(s.style || {}), color: c } }))}
                 style={{
                   background: c,
-                  width: 12, height: 12,
+                  width: 14, height: 14,
                   padding: 0,
                   border: '1px solid rgba(255,255,255,0.4)',
                   borderRadius: 3,
