@@ -31,7 +31,7 @@ import useChartInterval from '../hooks/useChartInterval.js';
 import useAnalysisBars from '../hooks/swr/useAnalysisBars.js';
 import useTheoryOverlays from '../hooks/swr/useTheoryOverlays.js';
 import { useLivePrice } from '../lib/useLivePrice.js';
-import { THEORY_CATALOG, THEORY_BY_ID, migrateTheoryIds }
+import { THEORY_CATALOG, THEORY_BY_ID, migrateTheoryIds, LONG_WINDOW_THEORIES }
   from '../analysis/theoryCatalog.js';
 import DrawingToolbar from '../analysis/DrawingToolbar.jsx';
 import DrawingLayer from '../analysis/drawings/DrawingLayer.jsx';
@@ -374,7 +374,25 @@ function TheorySelector({ ticker, selected, onChange }) {
                       display: 'inline-block', width: 8, height: 8,
                       borderRadius: '50%', background: t.color, flexShrink: 0,
                     }} />
-                    <span>{t.label}</span>
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden',
+                      textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {t.label}
+                    </span>
+                    {LONG_WINDOW_THEORIES.has(t.id) && (
+                      <span style={{
+                        fontSize: 9, fontWeight: 700,
+                        letterSpacing: '0.03em',
+                        textTransform: 'uppercase',
+                        padding: '1px 5px',
+                        color: '#e89a4c',
+                        background: 'rgba(232, 154, 76, 0.10)',
+                        border: '1px solid rgba(232, 154, 76, 0.35)',
+                        borderRadius: 999,
+                      }}
+                        title="Needs ≥1Y of bars to render. Pick 1Y or longer from the timeframe row.">
+                        1Y+
+                      </span>
+                    )}
                   </label>
                 );
               })}
@@ -893,12 +911,19 @@ export default function StockAnalysis() {
   // Phase D.3.1 — chart instance handed up by TheoryChart's onReady so
   // the DrawingLayer can talk to the price/time scale.
   const [chartRefs, setChartRefs] = useState(null);
-  // Phase D.3.1 — per-ticker persistent shape state.
+  // Phase D.3.1 + D.4 — per-ticker persistent shape state with
+  // undo/redo + selection + update.
   const {
     shapes: drawings,
+    selectedId: selectedDrawingId,
+    setSelectedId: setSelectedDrawingId,
     addShape: addDrawing,
     removeShape: removeDrawing,
+    updateShape: updateDrawing,
+    duplicateShape: duplicateDrawing,
     clearShapes: clearDrawings,
+    undo: undoDrawing,
+    redo: redoDrawing,
   } = useDrawings(ticker);
 
   // Phase C.4 — Cmd-K command palette.
@@ -1292,8 +1317,14 @@ export default function StockAnalysis() {
                           chartRefs={chartRefs}
                           activeTool={drawingTool}
                           shapes={drawings}
+                          selectedId={selectedDrawingId}
+                          setSelectedId={setSelectedDrawingId}
                           addShape={addDrawing}
                           removeShape={removeDrawing}
+                          updateShape={updateDrawing}
+                          duplicateShape={duplicateDrawing}
+                          undo={undoDrawing}
+                          redo={redoDrawing}
                           onToolReset={() => setDrawingTool('cursor')}
                         />
                         {drawings.length > 0 && (

@@ -11,6 +11,18 @@
  * Keep this list flat — 23 entries is small enough to scan and the
  * Cmd-K palette filters them client-side.
  */
+// Theories that need ≥1y of bars to compute properly. Used by the
+// dropdown to flag a "Long window" badge so the operator doesn't pick
+// one on a 1D/1W chart and wonder why nothing renders. Backend already
+// returns explanatory `notes` on the response — we surface those too.
+export const LONG_WINDOW_THEORIES = new Set([
+  'ma_ribbon',
+  'harmonic_patterns',
+  'elliott_wave',
+  'smc_order_blocks',
+  'wyckoff_phases',
+]);
+
 export const THEORY_CATALOG = [
   // Tier 1 — formulaic indicators most operators reach for first.
   { id: 'bollinger',         label: 'Bollinger Bands',  color: '#5b9bd5', tier: 1 },
