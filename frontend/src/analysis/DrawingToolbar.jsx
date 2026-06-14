@@ -19,12 +19,18 @@
 import React from 'react';
 
 export const DRAWING_TOOLS = [
-  { id: 'cursor',     glyph: '✥',  label: 'Cursor',          status: 'ready' },
-  { id: 'trendline',  glyph: '⟋',  label: 'Trend line',      status: 'ready' },
-  { id: 'horizontal', glyph: '─',  label: 'Horizontal line', status: 'ready' },
-  { id: 'fib',        glyph: '𝐅',  label: 'Fib retracement', status: 'ready' },
-  { id: 'rect',       glyph: '▭',  label: 'Rectangle',       status: 'ready' },
-  { id: 'text',       glyph: 'T',  label: 'Text note',       status: 'ready' },
+  { id: 'cursor',        glyph: '✥',  label: 'Cursor',           status: 'ready' },
+  { id: 'trendline',     glyph: '⟋',  label: 'Trend line',       status: 'ready' },
+  { id: 'ray',           glyph: '→',  label: 'Ray',              status: 'ready' },
+  { id: 'extended_line', glyph: '↔',  label: 'Extended line',    status: 'ready' },
+  { id: 'horizontal',    glyph: '─',  label: 'Horizontal line',  status: 'ready' },
+  { id: 'vertical',      glyph: '│',  label: 'Vertical line',    status: 'ready' },
+  { id: 'channel',       glyph: '⫽',  label: 'Parallel channel', status: 'ready' },
+  { id: 'pitchfork',     glyph: 'Ψ',  label: 'Andrews pitchfork',status: 'ready' },
+  { id: 'fib',           glyph: '𝐅',  label: 'Fib retracement',  status: 'ready' },
+  { id: 'fib_extension', glyph: '𝐅⁺', label: 'Fib extension',    status: 'ready' },
+  { id: 'rect',          glyph: '▭',  label: 'Rectangle',        status: 'ready' },
+  { id: 'text',          glyph: 'T',  label: 'Text note',        status: 'ready' },
 ];
 
 export default function DrawingToolbar({ active = 'cursor', onSelect }) {

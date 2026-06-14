@@ -174,6 +174,299 @@ export const DRAWING_TOOLS = {
     },
   },
 
+  // ── Tier-2 extended primitives (D.3.3) ──────────────────────────
+  ray: {
+    label: 'Ray',
+    pointCount: 2,
+    draw(ctx, pts, style, view) {
+      if (pts.length < 2) return;
+      const [a, b] = pts;
+      // Extend from a through b out to the right edge of the canvas.
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      let extX = view.width + 50;
+      let extY = b.y;
+      if (Math.abs(dx) > 1e-6) {
+        const t = (view.width - a.x) / dx;
+        if (t > 1) {
+          extX = a.x + dx * t;
+          extY = a.y + dy * t;
+        } else {
+          extX = b.x;
+          extY = b.y;
+        }
+      }
+      ctx.save();
+      ctx.strokeStyle = style.color;
+      ctx.lineWidth = style.width || 2;
+      ctx.setLineDash(style.dash || []);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(extX, extY);
+      ctx.stroke();
+      ctx.restore();
+    },
+    hitTest(pts, x, y) {
+      if (pts.length < 2) return false;
+      return pointToSegmentDistance(
+        x, y, pts[0].x, pts[0].y, pts[1].x, pts[1].y) < HIT_PX;
+    },
+  },
+
+  extended_line: {
+    label: 'Extended line',
+    pointCount: 2,
+    draw(ctx, pts, style, view) {
+      if (pts.length < 2) return;
+      const [a, b] = pts;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      // Project both directions to the canvas bounds.
+      let xL = 0;
+      let yL = a.y;
+      let xR = view.width;
+      let yR = b.y;
+      if (Math.abs(dx) > 1e-6) {
+        const tL = (0 - a.x) / dx;
+        const tR = (view.width - a.x) / dx;
+        xL = a.x + dx * tL; yL = a.y + dy * tL;
+        xR = a.x + dx * tR; yR = a.y + dy * tR;
+      } else {
+        xL = a.x; xR = a.x;
+        yL = 0; yR = view.height;
+      }
+      ctx.save();
+      ctx.strokeStyle = style.color;
+      ctx.lineWidth = style.width || 2;
+      ctx.setLineDash(style.dash || []);
+      ctx.beginPath();
+      ctx.moveTo(xL, yL);
+      ctx.lineTo(xR, yR);
+      ctx.stroke();
+      ctx.restore();
+    },
+    hitTest(pts, x, y) {
+      if (pts.length < 2) return false;
+      return pointToSegmentDistance(
+        x, y, pts[0].x, pts[0].y, pts[1].x, pts[1].y) < HIT_PX;
+    },
+  },
+
+  vertical: {
+    label: 'Vertical line',
+    pointCount: 1,
+    draw(ctx, pts, style, view) {
+      if (pts.length < 1) return;
+      const x = pts[0].x;
+      ctx.save();
+      ctx.strokeStyle = style.color;
+      ctx.lineWidth = style.width || 1;
+      ctx.setLineDash(style.dash || [6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, view.height);
+      ctx.stroke();
+      ctx.restore();
+    },
+    hitTest(pts, _x, _y, _view) {
+      if (pts.length < 1) return false;
+      // Hit only the column 6px wide.
+      return Math.abs(_x - pts[0].x) < HIT_PX;
+    },
+  },
+
+  channel: {
+    label: 'Parallel channel',
+    pointCount: 3,
+    draw(ctx, pts, style, view) {
+      if (pts.length < 2) return;
+      const [a, b, c] = pts;
+      // Baseline a→b
+      ctx.save();
+      ctx.strokeStyle = style.color;
+      ctx.lineWidth = style.width || 2;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      if (c) {
+        // Parallel offset = perpendicular distance from baseline to c
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const lenSq = dx * dx + dy * dy;
+        const t = lenSq > 0
+          ? ((c.x - a.x) * dx + (c.y - a.y) * dy) / lenSq
+          : 0;
+        const projX = a.x + dx * t;
+        const projY = a.y + dy * t;
+        const ox = c.x - projX;
+        const oy = c.y - projY;
+        ctx.beginPath();
+        ctx.moveTo(a.x + ox, a.y + oy);
+        ctx.lineTo(b.x + ox, b.y + oy);
+        ctx.stroke();
+        // Translucent fill between the two parallel lines.
+        ctx.fillStyle = (style.color || '#5fc9ce') + '20';
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.lineTo(b.x + ox, b.y + oy);
+        ctx.lineTo(a.x + ox, a.y + oy);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    },
+    hitTest(pts, x, y) {
+      if (pts.length < 2) return false;
+      // Hit either parallel line.
+      const baseHit = pointToSegmentDistance(
+        x, y, pts[0].x, pts[0].y, pts[1].x, pts[1].y) < HIT_PX;
+      if (baseHit || pts.length < 3) return baseHit;
+      const dx = pts[1].x - pts[0].x;
+      const dy = pts[1].y - pts[0].y;
+      const lenSq = dx * dx + dy * dy;
+      const t = lenSq > 0
+        ? ((pts[2].x - pts[0].x) * dx + (pts[2].y - pts[0].y) * dy) / lenSq
+        : 0;
+      const projX = pts[0].x + dx * t;
+      const projY = pts[0].y + dy * t;
+      const ox = pts[2].x - projX;
+      const oy = pts[2].y - projY;
+      return pointToSegmentDistance(
+        x, y, pts[0].x + ox, pts[0].y + oy,
+        pts[1].x + ox, pts[1].y + oy) < HIT_PX;
+    },
+  },
+
+  fib_extension: {
+    label: 'Fib extension',
+    pointCount: 3,
+    // Standard extension ratios.
+    levels: [0, 0.382, 0.618, 1.0, 1.272, 1.618, 2.0, 2.618],
+    draw(ctx, pts, style, view) {
+      if (pts.length < 2) return;
+      const [a, b, c] = pts;
+      ctx.save();
+      ctx.strokeStyle = style.color;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      if (c) {
+        ctx.lineTo(c.x, c.y);
+      }
+      ctx.stroke();
+      // Render extension levels measured from the b→a swing,
+      // projected from c (or hover).
+      if (c) {
+        const range = a.y - b.y;
+        const left = Math.min(b.x, c.x);
+        const right = Math.max(b.x, c.x);
+        ctx.font = '10px var(--font-mono, monospace)';
+        ctx.textBaseline = 'middle';
+        ctx.setLineDash([4, 4]);
+        for (const lvl of this.levels) {
+          const y = c.y - range * lvl;
+          ctx.strokeStyle = lvl === 1.0 || lvl === 1.618 ? style.color
+            : style.color + 'aa';
+          ctx.lineWidth = lvl === 1.0 || lvl === 1.618 ? 1.4 : 1;
+          ctx.beginPath();
+          ctx.moveTo(left, y);
+          ctx.lineTo(right + 80, y);
+          ctx.stroke();
+          ctx.fillStyle = ctx.strokeStyle;
+          ctx.textAlign = 'left';
+          const pct = (lvl * 100).toFixed(
+            lvl === 0.382 || lvl === 0.618 || lvl === 1.272
+              || lvl === 1.618 || lvl === 2.618 ? 1 : 0);
+          ctx.fillText(`${pct}%`, right + 86, y);
+        }
+      }
+      ctx.restore();
+    },
+    hitTest(pts, x, y) {
+      if (pts.length < 2) return false;
+      return pointToSegmentDistance(
+        x, y, pts[0].x, pts[0].y, pts[1].x, pts[1].y) < HIT_PX;
+    },
+  },
+
+  pitchfork: {
+    label: 'Andrews Pitchfork',
+    pointCount: 3,
+    draw(ctx, pts, style, view) {
+      if (pts.length < 2) return;
+      const [p0, p1, p2] = pts;
+      ctx.save();
+      ctx.strokeStyle = style.color;
+      ctx.lineWidth = style.width || 1.5;
+      ctx.setLineDash([]);
+      if (p2) {
+        // Median line: starts at p0, passes through midpoint of p1↔p2.
+        const mx = (p1.x + p2.x) / 2;
+        const my = (p1.y + p2.y) / 2;
+        const dx = mx - p0.x;
+        const dy = my - p0.y;
+        // Extend out to canvas right edge.
+        let extT = 1;
+        if (Math.abs(dx) > 1e-6) {
+          extT = Math.max(extT, (view.width - p0.x) / dx);
+        }
+        const endX = p0.x + dx * extT;
+        const endY = p0.y + dy * extT;
+        // Median
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+        // Upper parallel through p1
+        const ux = p1.x - mx;
+        const uy = p1.y - my;
+        ctx.beginPath();
+        ctx.moveTo(p0.x + ux, p0.y + uy);
+        ctx.lineTo(endX + ux, endY + uy);
+        ctx.stroke();
+        // Lower parallel through p2
+        ctx.beginPath();
+        ctx.moveTo(p0.x - ux, p0.y - uy);
+        ctx.lineTo(endX - ux, endY - uy);
+        ctx.stroke();
+        // Anchor segment p1-p2 (light)
+        ctx.save();
+        ctx.globalAlpha = 0.4;
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+        ctx.restore();
+      } else {
+        // Preview while collecting the 3rd point.
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    },
+    hitTest(pts, x, y, view) {
+      if (pts.length < 3) {
+        if (pts.length === 2) {
+          return pointToSegmentDistance(x, y, pts[0].x, pts[0].y,
+            pts[1].x, pts[1].y) < HIT_PX;
+        }
+        return false;
+      }
+      const [p0, p1, p2] = pts;
+      const mx = (p1.x + p2.x) / 2;
+      const my = (p1.y + p2.y) / 2;
+      return pointToSegmentDistance(x, y, p0.x, p0.y, mx, my) < HIT_PX
+        || pointToSegmentDistance(x, y, p0.x, p0.y, p1.x, p1.y) < HIT_PX
+        || pointToSegmentDistance(x, y, p0.x, p0.y, p2.x, p2.y) < HIT_PX;
+    },
+  },
+
   text: {
     label: 'Text note',
     pointCount: 1,

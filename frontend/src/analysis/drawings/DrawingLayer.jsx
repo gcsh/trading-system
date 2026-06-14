@@ -26,7 +26,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DRAWING_TOOLS, DEFAULT_STYLE } from './tools.js';
 
-const WIRED_TOOLS = new Set(['trendline', 'horizontal', 'fib', 'rect', 'text']);
+const WIRED_TOOLS = new Set([
+  'trendline', 'horizontal', 'fib', 'rect', 'text',
+  // Tier-2 (D.3.3) — all share the existing point-collect state machine.
+  'ray', 'extended_line', 'vertical', 'channel', 'pitchfork', 'fib_extension',
+]);
 const DRAG_THRESHOLD_PX = 4;
 const HANDLE_RADIUS = 5;
 
