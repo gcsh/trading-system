@@ -29,6 +29,11 @@ import IntervalSelector from '../components/IntervalSelector.jsx';
 import useChartTimeframe from '../hooks/useChartTimeframe.js';
 import useChartInterval from '../hooks/useChartInterval.js';
 import useAnalysisBars from '../hooks/swr/useAnalysisBars.js';
+import useTheoryOverlays from '../hooks/swr/useTheoryOverlays.js';
+import { THEORY_CATALOG, THEORY_BY_ID, migrateTheoryIds }
+  from '../analysis/theoryCatalog.js';
+import DrawingToolbar from '../analysis/DrawingToolbar.jsx';
+import CommandPalette from '../analysis/CommandPalette.jsx';
 
 const WINDOWS = [
   { id: 'today', label: 'Today' },
@@ -244,21 +249,12 @@ function ThesisAccordion({ sections }) {
   );
 }
 
-/* Phase C.2 scaffold — Theory selector dropdown.
-   Lets the operator pick one or more theories from the Theory Studio
-   catalog to overlay on the analysis chart. This commit ships the
-   UI + persisted state (per-ticker localStorage). The actual overlay
-   rendering reuses TheoryChart.annotations and lights up in the next
-   phase (C.2 full). Starter set: 6 of the 18 theories — Bollinger,
-   MACD, RSI div, AVWAP, Pivots, Fib retracement. */
-const THEORY_CATALOG = [
-  { id: 'bollinger', label: 'Bollinger Bands', color: '#5b9bd5' },
-  { id: 'macd',      label: 'MACD',            color: '#a073d4' },
-  { id: 'rsi_div',   label: 'RSI Divergence',  color: '#e89a4c' },
-  { id: 'avwap',     label: 'AVWAP',           color: '#5fc9ce' },
-  { id: 'pivots',    label: 'Pivot Levels',    color: '#e6c95f' },
-  { id: 'fib',       label: 'Fibonacci',       color: '#e8606e' },
-];
+/* Phase C.2 — Theory selector dropdown (full wire-up).
+   The inline picker exposes the six tier-1 theories that operators
+   reach for most; the Cmd-K palette (Phase C.4) surfaces all 23
+   from the shared THEORY_CATALOG. Both surfaces toggle the same
+   `selectedTheories` array on the parent. */
+const TIER1_THEORIES = THEORY_CATALOG.filter((t) => t.tier === 1);
 
 function TheorySelector({ ticker, selected, onChange }) {
   const [open, setOpen] = useState(false);
@@ -306,7 +302,7 @@ function TheorySelector({ ticker, selected, onChange }) {
           zIndex: 50,
           boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
         }}>
-          {THEORY_CATALOG.map((t) => {
+          {TIER1_THEORIES.map((t) => {
             const on = selected.includes(t.id);
             return (
               <label key={t.id}
@@ -336,9 +332,13 @@ function TheorySelector({ ticker, selected, onChange }) {
             marginTop: 6, padding: 6,
             borderTop: '1px solid var(--border-subtle)',
             fontSize: 10, color: 'var(--muted)',
-            fontStyle: 'italic',
           }}>
-            Phase C.2 scaffold — overlay rendering wires up next round.
+            More via <kbd style={{
+              fontFamily: 'var(--font-mono, monospace)',
+              padding: '1px 4px',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 3,
+            }}>⌘ K</kbd> palette ({THEORY_CATALOG.length} theories total)
           </div>
         </div>
       )}
@@ -795,33 +795,68 @@ export default function StockAnalysis() {
   const [hiddenOverlays, setHiddenOverlays] = useState({});
   const toggleOverlay = (id) => setHiddenOverlays((m) => ({ ...m, [id]: !m[id] }));
 
-  // Phase C.2 scaffold — selected theory overlays, persisted per-ticker
-  // to localStorage so a navigation between tickers preserves intent.
+  // Phase C.2 — selected theory overlays, persisted per-ticker to
+  // localStorage so navigation between tickers preserves intent.
+  // migrateTheoryIds maps the old scaffold IDs (`macd`, `rsi_div`,
+  // `fib`) onto the backend-canonical names the multi-overlay fetch
+  // expects.
   const theoryStorageKey = `tb.analysis.theories.${ticker || 'SPY'}`;
   const [selectedTheories, setSelectedTheoriesRaw] = useState(() => {
     try {
-      const v = window.localStorage.getItem(theoryStorageKey);
-      return v ? JSON.parse(v) : [];
+      const v = globalThis.localStorage.getItem(theoryStorageKey);
+      return migrateTheoryIds(v ? JSON.parse(v) : []);
     } catch (_) {
       return [];
     }
   });
   const setSelectedTheories = (next) => {
-    setSelectedTheoriesRaw(next);
+    const cleaned = migrateTheoryIds(next);
+    setSelectedTheoriesRaw(cleaned);
     try {
-      window.localStorage.setItem(theoryStorageKey, JSON.stringify(next));
+      globalThis.localStorage.setItem(theoryStorageKey, JSON.stringify(cleaned));
     } catch (_) { /* localStorage disabled — fine */ }
+  };
+  const toggleSelectedTheory = (id) => {
+    setSelectedTheories(
+      selectedTheories.includes(id)
+        ? selectedTheories.filter((x) => x !== id)
+        : [...selectedTheories, id],
+    );
   };
   // When the ticker changes, re-hydrate from the new ticker's key.
   useEffect(() => {
     try {
-      const v = window.localStorage.getItem(theoryStorageKey);
-      setSelectedTheoriesRaw(v ? JSON.parse(v) : []);
+      const v = globalThis.localStorage.getItem(theoryStorageKey);
+      setSelectedTheoriesRaw(migrateTheoryIds(v ? JSON.parse(v) : []));
     } catch (_) {
       setSelectedTheoriesRaw([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticker]);
+
+  // Phase C.3 — active drawing tool (cursor is the only wired one
+  // until the canvas overlay engine lands).
+  const [drawingTool, setDrawingTool] = useState('cursor');
+
+  // Phase C.4 — Cmd-K command palette.
+  const [cmdOpen, setCmdOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e) => {
+      const t = e.target;
+      const tag = (t && t.tagName) || '';
+      const isText = tag === 'INPUT' || tag === 'TEXTAREA'
+        || (t && t.isContentEditable);
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setCmdOpen((v) => !v);
+      } else if (!isText && e.key === '/' && !cmdOpen) {
+        e.preventDefault();
+        setCmdOpen(true);
+      }
+    };
+    globalThis.addEventListener('keydown', onKey);
+    return () => globalThis.removeEventListener('keydown', onKey);
+  }, [cmdOpen]);
 
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -871,6 +906,13 @@ export default function StockAnalysis() {
     ? canonicalBars
     : (data?.bars || []);
 
+  // Phase C.2 — multi-theory overlay fetch. Returns annotation dicts
+  // keyed by backend theory name. Skipped (no fetch) when nothing is
+  // selected so a cold page burns zero requests on theories.
+  const { annotations: theoryAnnotations } = useTheoryOverlays(
+    ticker, selectedTheories, backendWindow,
+  );
+
   const patternList = useMemo(() => {
     if (!data?.knowledge) return [];
     return Object.keys(data.knowledge).sort();
@@ -896,6 +938,24 @@ export default function StockAnalysis() {
               correct backend window + client trim via useChartTimeframe. */}
           <TimeframeSelector value={timeframe} onChange={setTimeframe} />
           <IntervalSelector value={interval} onChange={setInterval} />
+          {/* Phase C.4 — Cmd-K palette opener. Visible affordance so
+              new operators discover the keyboard shortcut. */}
+          <button
+            type="button"
+            className="btn small"
+            data-testid="analysis-cmdk-open"
+            onClick={() => setCmdOpen(true)}
+            title="Open command palette (⌘K or /)"
+            style={{
+              fontSize: 11,
+              padding: '3px 9px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+            }}
+          >
+            ⌘ K
+          </button>
         </div>
       </div>
 
@@ -1002,10 +1062,22 @@ export default function StockAnalysis() {
               const visibleFams = Array.from(new Set(
                 visibleObs.map((o) => o.family).filter(Boolean),
               ));
-              const annotations = mapObservationsToAnnotations(
+              const detectorAnnotations = mapObservationsToAnnotations(
                 visibleObs, FAMILY_COLORS,
               );
+              // Phase C.2 — merge detector annotations with the
+              // backend theory overlays (Bollinger / MACD / RSI div /
+              // …). TheoryChart renders each key as its own theory.
+              const annotations = {
+                ...detectorAnnotations,
+                ...(theoryAnnotations || {}),
+              };
               const palettes = buildAnnotationPalettes(visibleFams, FAMILY_COLORS);
+              for (const tid of Object.keys(theoryAnnotations || {})) {
+                const meta = THEORY_BY_ID[tid];
+                const c = meta?.color || '#9aa5b2';
+                palettes[tid] = { primary: c, secondary: c, tertiary: c };
+              }
 
               // Phase C.1 — Thesis Context accordion. Replaces the
               // prior flat stack with collapsible sections so the
@@ -1098,8 +1170,20 @@ export default function StockAnalysis() {
                 >
                   <div style={{
                     flex: 1, minHeight: 460, height: '100%',
-                    display: 'flex', flexDirection: 'column',
+                    display: 'flex', flexDirection: 'row',
+                    gap: 6,
                   }}>
+                    {/* Phase C.3 — TradingView-style left toolbar.
+                        Cursor is wired; freehand drawing primitives
+                        scaffold here pending the canvas overlay engine. */}
+                    <DrawingToolbar
+                      active={drawingTool}
+                      onSelect={setDrawingTool}
+                    />
+                    <div style={{
+                      flex: 1, minWidth: 0, height: '100%',
+                      display: 'flex', flexDirection: 'column',
+                    }}>
                     {barsForChart && barsForChart.length > 0 ? (
                       <TheoryChart
                         bars={barsForChart}
@@ -1114,6 +1198,7 @@ export default function StockAnalysis() {
                         No bars available for {ticker}.
                       </div>
                     )}
+                    </div>
                   </div>
                 </ChartFullscreenWrapper>
               );
@@ -1163,6 +1248,24 @@ export default function StockAnalysis() {
           </div>
         </div>
       )}
+
+      {/* Phase C.4 — Cmd-K command palette. Single surface for
+          toggling any of the 23 theory overlays plus quick actions
+          (clear overlays for now; more land here as they earn it). */}
+      <CommandPalette
+        open={cmdOpen}
+        onClose={() => setCmdOpen(false)}
+        selectedTheories={selectedTheories}
+        onToggleTheory={(id) => toggleSelectedTheory(id)}
+        actions={[
+          {
+            id: 'clear-theories',
+            label: 'Clear all chart overlays',
+            color: '#e8606e',
+            onPick: () => { setSelectedTheories([]); setCmdOpen(false); },
+          },
+        ]}
+      />
     </div>
   );
 }
