@@ -134,9 +134,19 @@ def _fetch_bars_from_cache(
         # we normalize 1h/60m so a single intra-hour query hits the
         # cache regardless of which slug the caller used.
         iv_cache = "60m" if interval.lower() in ("1h", "60m") else interval.lower()
+        # Materialize rows as plain tuples INSIDE the session so we don't
+        # touch detached ORM objects after the context exits — that
+        # raised a DetachedInstanceError 500 on the first run.
         with session_scope() as sess:
-            rows = sess.scalars(
-                select(StockBar)
+            raw = sess.execute(
+                select(
+                    StockBar.bar_ts,
+                    StockBar.open,
+                    StockBar.high,
+                    StockBar.low,
+                    StockBar.close,
+                    StockBar.volume,
+                )
                 .where(StockBar.ticker == ticker.upper())
                 .where(StockBar.interval == iv_cache)
                 .where(StockBar.bar_ts >= datetime.combine(
@@ -148,29 +158,26 @@ def _fetch_bars_from_cache(
     except Exception:
         logger.debug("stock_bars cache read failed", exc_info=True)
         return None
-    if not rows:
+    if not raw:
         return None
     # Sanity floor — if the cache only carries a sliver of the requested
     # window, prefer to fall through to live so we don't render a chart
     # that looks broken to the operator.
     if interval == "1d":
-        # ~252 trading days/year. Require ≥30% of the requested span
-        # so partial-backfill tickers don't masquerade as complete.
         expected = max(5, int(lookback_days * 252 / 365 * 0.30))
-        if len(rows) < expected:
+        if len(raw) < expected:
             return None
     out: List[Dict[str, Any]] = []
-    for r in rows:
-        ts = r.bar_ts.isoformat() if r.bar_ts else None
-        if not ts:
+    for bar_ts, o, h, l, c, v in raw:
+        if not bar_ts:
             continue
         out.append({
-            "t": ts,
-            "open":   float(r.open)   if r.open   is not None else None,
-            "high":   float(r.high)   if r.high   is not None else None,
-            "low":    float(r.low)    if r.low    is not None else None,
-            "close":  float(r.close)  if r.close  is not None else None,
-            "volume": float(r.volume) if r.volume is not None else 0.0,
+            "t": bar_ts.isoformat(),
+            "open":   float(o) if o is not None else None,
+            "high":   float(h) if h is not None else None,
+            "low":    float(l) if l is not None else None,
+            "close":  float(c) if c is not None else None,
+            "volume": float(v) if v is not None else 0.0,
         })
     # Drop zero-OHLC rows (weekends/holidays that snuck in).
     out = [b for b in out if (b["open"] or 0) > 0 and (b["close"] or 0) > 0]
