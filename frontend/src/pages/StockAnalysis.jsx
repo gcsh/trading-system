@@ -34,6 +34,8 @@ import { useLivePrice } from '../lib/useLivePrice.js';
 import { THEORY_CATALOG, THEORY_BY_ID, migrateTheoryIds }
   from '../analysis/theoryCatalog.js';
 import DrawingToolbar from '../analysis/DrawingToolbar.jsx';
+import DrawingLayer from '../analysis/drawings/DrawingLayer.jsx';
+import useDrawings from '../analysis/drawings/useDrawings.js';
 import CommandPalette from '../analysis/CommandPalette.jsx';
 
 const WINDOWS = [
@@ -250,15 +252,29 @@ function ThesisAccordion({ sections }) {
   );
 }
 
-/* Phase C.2 — Theory selector dropdown (full wire-up).
-   The inline picker exposes the six tier-1 theories that operators
-   reach for most; the Cmd-K palette (Phase C.4) surfaces all 23
-   from the shared THEORY_CATALOG. Both surfaces toggle the same
-   `selectedTheories` array on the parent. */
-const TIER1_THEORIES = THEORY_CATALOG.filter((t) => t.tier === 1);
+/* Phase C.2 — Theory selector dropdown (full catalog).
+   Exposes all 23 backend theories grouped by tier so the operator
+   can scan the full inventory without leaving the dropdown. The
+   Cmd-K palette mirrors the same toggle for keyboard-first flow. */
+const TIER_LABELS = {
+  1: 'Essential indicators',
+  2: 'Bands · channels · oscillators',
+  3: 'Geometric · structural',
+  4: 'Pattern engines',
+};
 
 function TheorySelector({ ticker, selected, onChange }) {
   const [open, setOpen] = useState(false);
+  const tiers = useMemo(() => {
+    const out = {};
+    for (const t of THEORY_CATALOG) {
+      const tier = t.tier || 99;
+      if (!out[tier]) out[tier] = [];
+      out[tier].push(t);
+    }
+    return out;
+  }, []);
+  const tierKeys = Object.keys(tiers).sort();
   return (
     <div style={{ position: 'relative' }}>
       <button type="button"
@@ -282,9 +298,9 @@ function TheorySelector({ ticker, selected, onChange }) {
             Theories
           </span>
           {selected.length === 0
-            ? <span style={{ color: 'var(--muted)' }}>none selected</span>
+            ? <span style={{ color: 'var(--muted)' }}>none selected · {THEORY_CATALOG.length} available</span>
             : <span style={{ color: 'var(--text-primary)' }}>
-                {selected.length} active
+                {selected.length} of {THEORY_CATALOG.length} active
               </span>}
         </span>
         <span style={{ fontSize: 10, color: 'var(--muted)' }}>{open ? '▴' : '▾'}</span>
@@ -296,50 +312,85 @@ function TheorySelector({ ticker, selected, onChange }) {
           background: 'var(--bg-secondary)',
           border: '1px solid var(--border-subtle)',
           borderRadius: 6,
-          // z-index has to clear (a) sibling accordion sections that
-          // render below this one in DOM order, and (b) any chart
-          // canvases the wrapper might layer on top. 50 is well
-          // above the SPA's typical surface stack.
           zIndex: 50,
           boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+          maxHeight: 420,
+          overflowY: 'auto',
         }}>
-          {TIER1_THEORIES.map((t) => {
-            const on = selected.includes(t.id);
-            return (
-              <label key={t.id}
-                     style={{
-                       display: 'flex', alignItems: 'center', gap: 8,
-                       padding: '5px 6px', cursor: 'pointer',
-                       borderRadius: 4,
-                       background: on ? 'rgba(95, 201, 206, 0.06)' : 'transparent',
-                       fontSize: 12, color: 'var(--text-primary)',
-                     }}>
-                <input type="checkbox" checked={on}
-                       onChange={(e) => {
-                         const next = e.target.checked
-                           ? [...selected, t.id]
-                           : selected.filter((id) => id !== t.id);
-                         onChange(next);
-                       }} />
-                <span style={{
-                  display: 'inline-block', width: 8, height: 8,
-                  borderRadius: '50%', background: t.color,
-                }} />
-                <span>{t.label}</span>
-              </label>
-            );
-          })}
+          {selected.length > 0 && (
+            <button type="button"
+                    onClick={() => onChange([])}
+                    style={{
+                      width: '100%', padding: '4px 6px',
+                      marginBottom: 4,
+                      background: 'transparent',
+                      border: '1px solid var(--border-subtle)',
+                      borderRadius: 4,
+                      color: 'var(--muted)',
+                      fontSize: 10,
+                      cursor: 'pointer',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                      fontWeight: 700,
+                    }}>
+              Clear all ({selected.length})
+            </button>
+          )}
+          {tierKeys.map((tier) => (
+            <div key={tier} style={{ marginTop: tier !== tierKeys[0] ? 8 : 0 }}>
+              <div style={{
+                fontSize: 9, fontWeight: 700,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                color: 'var(--muted)',
+                padding: '4px 6px',
+                borderBottom: '1px solid var(--border-subtle)',
+                marginBottom: 2,
+              }}>
+                {TIER_LABELS[tier] || `Tier ${tier}`}
+                <span style={{ marginLeft: 4, fontWeight: 500 }}>
+                  · {tiers[tier].length}
+                </span>
+              </div>
+              {tiers[tier].map((t) => {
+                const on = selected.includes(t.id);
+                return (
+                  <label key={t.id}
+                         style={{
+                           display: 'flex', alignItems: 'center', gap: 8,
+                           padding: '4px 6px', cursor: 'pointer',
+                           borderRadius: 4,
+                           background: on ? 'rgba(95, 201, 206, 0.06)' : 'transparent',
+                           fontSize: 12, color: 'var(--text-primary)',
+                         }}>
+                    <input type="checkbox" checked={on}
+                           onChange={(e) => {
+                             const next = e.target.checked
+                               ? [...selected, t.id]
+                               : selected.filter((id) => id !== t.id);
+                             onChange(next);
+                           }} />
+                    <span style={{
+                      display: 'inline-block', width: 8, height: 8,
+                      borderRadius: '50%', background: t.color, flexShrink: 0,
+                    }} />
+                    <span>{t.label}</span>
+                  </label>
+                );
+              })}
+            </div>
+          ))}
           <div style={{
-            marginTop: 6, padding: 6,
+            marginTop: 8, padding: 6,
             borderTop: '1px solid var(--border-subtle)',
             fontSize: 10, color: 'var(--muted)',
           }}>
-            More via <kbd style={{
+            Keyboard-first: <kbd style={{
               fontFamily: 'var(--font-mono, monospace)',
               padding: '1px 4px',
               border: '1px solid var(--border-subtle)',
               borderRadius: 3,
-            }}>⌘ K</kbd> palette ({THEORY_CATALOG.length} theories total)
+            }}>⌘ K</kbd> opens the same toggle as a searchable palette
           </div>
         </div>
       )}
@@ -835,9 +886,20 @@ export default function StockAnalysis() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticker]);
 
-  // Phase C.3 — active drawing tool (cursor is the only wired one
-  // until the canvas overlay engine lands).
+  // Phase C.3 + D.3.1 — active drawing tool. Tier-1 tools
+  // (trendline, horizontal, fib, rect, text) are wired through the
+  // DrawingLayer canvas overlay; extended inventory queues for D.3.3+.
   const [drawingTool, setDrawingTool] = useState('cursor');
+  // Phase D.3.1 — chart instance handed up by TheoryChart's onReady so
+  // the DrawingLayer can talk to the price/time scale.
+  const [chartRefs, setChartRefs] = useState(null);
+  // Phase D.3.1 — per-ticker persistent shape state.
+  const {
+    shapes: drawings,
+    addShape: addDrawing,
+    removeShape: removeDrawing,
+    clearShapes: clearDrawings,
+  } = useDrawings(ticker);
 
   // Phase C.4 — Cmd-K command palette.
   const [cmdOpen, setCmdOpen] = useState(false);
@@ -1213,16 +1275,51 @@ export default function StockAnalysis() {
                     <div style={{
                       flex: 1, minWidth: 0, height: '100%',
                       display: 'flex', flexDirection: 'column',
+                      position: 'relative',
                     }}>
                     {barsForChart && barsForChart.length > 0 ? (
-                      <TheoryChart
-                        bars={barsForChart}
-                        annotations={annotations}
-                        palettes={palettes}
-                        primaryTheory={Object.keys(annotations)[0] || null}
-                        liveTick={liveTick}
-                        hideLegend
-                      />
+                      <>
+                        <TheoryChart
+                          bars={barsForChart}
+                          annotations={annotations}
+                          palettes={palettes}
+                          primaryTheory={Object.keys(annotations)[0] || null}
+                          liveTick={liveTick}
+                          hideLegend
+                          onReady={setChartRefs}
+                        />
+                        <DrawingLayer
+                          chartRefs={chartRefs}
+                          activeTool={drawingTool}
+                          shapes={drawings}
+                          addShape={addDrawing}
+                          removeShape={removeDrawing}
+                          onToolReset={() => setDrawingTool('cursor')}
+                        />
+                        {drawings.length > 0 && (
+                          <button
+                            type="button"
+                            data-testid="analysis-drawings-clear"
+                            onClick={clearDrawings}
+                            title="Clear all drawings on this ticker"
+                            style={{
+                              position: 'absolute',
+                              top: 6, right: 6, zIndex: 7,
+                              fontSize: 10, fontWeight: 700,
+                              letterSpacing: '0.04em',
+                              textTransform: 'uppercase',
+                              padding: '3px 7px',
+                              background: 'rgba(232, 96, 110, 0.14)',
+                              color: '#e8606e',
+                              border: '1px solid rgba(232, 96, 110, 0.35)',
+                              borderRadius: 999,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Clear {drawings.length}
+                          </button>
+                        )}
+                      </>
                     ) : (
                       <div className="panel" style={{
                         padding: 20, fontSize: 13, color: 'var(--muted)',

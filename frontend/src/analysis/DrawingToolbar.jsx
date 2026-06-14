@@ -20,11 +20,11 @@ import React from 'react';
 
 export const DRAWING_TOOLS = [
   { id: 'cursor',     glyph: '✥',  label: 'Cursor',          status: 'ready' },
-  { id: 'trendline',  glyph: '⟋',  label: 'Trend line',      status: 'soon' },
-  { id: 'horizontal', glyph: '─',  label: 'Horizontal line', status: 'soon' },
-  { id: 'fib',        glyph: '𝐅',  label: 'Fib retracement', status: 'soon' },
-  { id: 'rect',       glyph: '▭',  label: 'Rectangle',       status: 'soon' },
-  { id: 'text',       glyph: 'T',  label: 'Text note',       status: 'soon' },
+  { id: 'trendline',  glyph: '⟋',  label: 'Trend line',      status: 'ready' },
+  { id: 'horizontal', glyph: '─',  label: 'Horizontal line', status: 'ready' },
+  { id: 'fib',        glyph: '𝐅',  label: 'Fib retracement', status: 'ready' },
+  { id: 'rect',       glyph: '▭',  label: 'Rectangle',       status: 'ready' },
+  { id: 'text',       glyph: 'T',  label: 'Text note',       status: 'ready' },
 ];
 
 export default function DrawingToolbar({ active = 'cursor', onSelect }) {

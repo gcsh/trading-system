@@ -88,6 +88,7 @@ function scheduleIdle(cb) {
 export default function TheoryChart({
   bars, annotations, palettes, primaryTheory, liveTick,
   hideLegend = false,
+  onReady,
 }) {
   const containerRef = useRef(null);
   const overlayRef = useRef(null);
@@ -247,7 +248,20 @@ export default function TheoryChart({
 
       // Last step of async init — wakes up the candles / overlays
       // effects so they re-run with a now-valid series ref.
-      if (!disposed) setChartReady(true);
+      if (!disposed) {
+        setChartReady(true);
+        // Phase D.3.1 — surface the chart + candle series to a parent
+        // drawing layer that needs price/time scale coordinates.
+        if (onReady) {
+          try {
+            onReady({
+              chart: chartRef.current,
+              candleSeries: candleSeriesRef.current,
+              container: containerRef.current,
+            });
+          } catch (_) { /* swallow — drawing is non-critical */ }
+        }
+      }
     })();
     return () => {
       disposed = true;
