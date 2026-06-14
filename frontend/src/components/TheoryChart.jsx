@@ -85,7 +85,7 @@ function scheduleIdle(cb) {
 }
 
 
-export default function TheoryChart({
+function TheoryChartInner({
   bars, annotations, palettes, primaryTheory, liveTick,
   hideLegend = false,
   onReady,
@@ -1197,3 +1197,23 @@ export default function TheoryChart({
     </div>
   );
 }
+
+// React.memo wrapper — TheoryChart is the dominant cost on the
+// Analysis page (it tears down + re-adds every overlay line series
+// inside applyAnnotations). A parent re-render that doesn't actually
+// change bars/annotations/palettes/liveTick should NOT trigger that
+// effect. We do a cheap reference compare on the heavy props; the
+// parent must (and does) memoize them so unrelated state changes
+// like adding a drawing or live-ticking don't churn the chart.
+const TheoryChart = React.memo(TheoryChartInner, (prev, next) => (
+  prev.bars === next.bars
+  && prev.annotations === next.annotations
+  && prev.palettes === next.palettes
+  && prev.liveTick === next.liveTick
+  && prev.hideLegend === next.hideLegend
+  && prev.primaryTheory === next.primaryTheory
+  // onReady fires once at init; we don't need to retrigger when the
+  // parent passes a new lambda each render.
+));
+
+export default TheoryChart;

@@ -13,6 +13,16 @@
  * zones, markers, signals natively (see TheoryChart.jsx around 367+).
  */
 import useSWR from 'swr';
+import { useMemo } from 'react';
+
+// Module-level fallbacks so an idle hook (no theories selected) never
+// hands a fresh reference to its consumer. Without this, every render
+// got a brand-new `{}` → useMemo deps in StockAnalysis kept missing
+// the cache → TheoryChart's expensive annotation effect kept refiring
+// → the main thread was busy tearing down and re-adding every overlay
+// line series → clicks/drawings felt laggy or dead.
+const EMPTY_ANN = Object.freeze({});
+const EMPTY_BARS = Object.freeze([]);
 
 export default function useTheoryOverlays(ticker, theoryIds, backendWindow) {
   const ids = Array.isArray(theoryIds) ? theoryIds.filter(Boolean) : [];
@@ -25,10 +35,20 @@ export default function useTheoryOverlays(ticker, theoryIds, backendWindow) {
   const { data, error, isLoading } = useSWR(key, {
     revalidateOnFocus: false,
   });
-  return {
-    annotations: data?.annotations || {},
-    bars: data?.bars || [],
-    error,
-    isLoading,
-  };
+
+  // Stabilise references: if data is undefined, we return the same
+  // frozen empty objects every render so downstream useMemo deps hit
+  // the cache. If data exists, `data.annotations` / `data.bars` are
+  // already stable across renders (SWR caches the same object until
+  // the next fetch).
+  const annotations = useMemo(
+    () => (data && data.annotations) ? data.annotations : EMPTY_ANN,
+    [data],
+  );
+  const bars = useMemo(
+    () => (data && data.bars) ? data.bars : EMPTY_BARS,
+    [data],
+  );
+
+  return { annotations, bars, error, isLoading };
 }
