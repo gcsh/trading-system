@@ -183,18 +183,27 @@ export default function GexByStrikeChart({
       label: 'γ MAX', color: 'var(--accent-yellow)', strike: maxGammaStrike });
   }
 
+  // Geometry → CSS-percent helpers. The SVG stretches horizontally
+  // (`preserveAspectRatio="none"`) so any x-coord in viewBox units
+  // maps to (x / VW) of the container's rendered width. Y is 1:1 in px
+  // because VH equals the container's height prop.
+  const pctX = (x) => `${(x / VW) * 100}%`;
+
   return (
-    <div className="v2-gex-strikechart" style={{ width: '100%' }}>
-      {/* This chart is fundamentally a horizontal-bar layout — bars
-          extend left/right from a center axis. Stretching the SVG
-          horizontally (`preserveAspectRatio="none"`) makes the bars
-          longer, which is correct: bar length encodes GEX magnitude.
-          The previous attempt to use `xMidYMid meet` shrunk the bars
-          into a narrow center band with huge empty side margins. */}
+    <div className="v2-gex-strikechart"
+         style={{ width: '100%', position: 'relative', height }}>
+      {/* SHAPES ONLY in SVG — bars, grid, polyline, markers'
+          indicator lines, spot dot. ALL TEXT is rendered as HTML
+          overlays below. This is required because the SVG
+          stretches horizontally (`preserveAspectRatio="none"`); any
+          <text> inside would get its glyphs and inter-letter spacing
+          stretched too, producing the "7 9 4" wide-letter look the
+          operator flagged. HTML labels stay typographically correct
+          regardless of how wide the container is. */}
       <svg viewBox={`0 0 ${VW} ${VH}`}
            preserveAspectRatio="none"
            width="100%" height={height}
-           style={{ display: 'block' }}>
+           style={{ display: 'block', position: 'absolute', inset: 0 }}>
         {/* Backdrop grid lines (vertical, at each x-tick). */}
         {xTicks.map((t, i) => (
           <line key={`vg-${i}`}
@@ -205,35 +214,6 @@ export default function GexByStrikeChart({
                 strokeDasharray={t === 0 ? null : '2 4'}
                 opacity={t === 0 ? 0.7 : 0.5} />
         ))}
-
-        {/* Center axis label */}
-        <text x={x0} y={PAD.top - 10}
-              fill="var(--text-tertiary)" fontSize="10"
-              fontFamily="var(--font-mono)" textAnchor="middle">
-          0
-        </text>
-
-        {/* X-axis numeric ticks (top) */}
-        {xTicks.map((t, i) => (
-          t === 0 ? null : (
-            <text key={`xt-${i}`}
-                  x={xFor(t)} y={PAD.top + innerH + 18}
-                  fill="var(--text-tertiary)" fontSize="9"
-                  fontFamily="var(--font-mono)" textAnchor="middle">
-              {fmtBig(t)}
-            </text>
-          )
-        ))}
-        <text x={PAD.left + 4} y={PAD.top + innerH + 18}
-              fill="var(--text-tertiary)" fontSize="9"
-              fontFamily="var(--font-mono)" textAnchor="start">
-          PUT ←
-        </text>
-        <text x={PAD.left + innerW - 4} y={PAD.top + innerH + 18}
-              fill="var(--text-tertiary)" fontSize="9"
-              fontFamily="var(--font-mono)" textAnchor="end">
-          → CALL
-        </text>
 
         {/* Put GEX bars (extend LEFT from center → red) */}
         {clipped.map((r) => {
@@ -275,68 +255,99 @@ export default function GexByStrikeChart({
                     strokeLinecap="round" />
         )}
 
-        {/* Y-axis strike labels (left side). */}
-        {labelStrikes.map((r) => (
-          <text key={`yl-${r.strike}`}
-                x={PAD.left - 8} y={yFor(r.strike) + 3}
-                fill="var(--text-tertiary)" fontSize="10"
-                fontFamily="var(--font-mono)" textAnchor="end">
-            {fmtStrike(r.strike)}
-          </text>
-        ))}
-
-        {/* Markers — horizontal lines + label badges on the right. */}
+        {/* Markers — indicator lines only. Badge + text overlay below. */}
         {markers.map((m, i) => (
-          <g key={`mk-${i}`}>
-            <line x1={PAD.left} y1={m.y}
-                  x2={PAD.left + innerW} y2={m.y}
-                  stroke={m.color} strokeWidth={0.7}
-                  strokeDasharray="3 3" opacity={0.5} />
-            <rect x={VW - PAD.right + 4} y={m.y - 7}
-                  width={PAD.right - 8} height={14}
-                  rx={2} ry={2}
-                  fill="var(--bg-elevated)"
-                  stroke={m.color} strokeWidth={0.7} />
-            <text x={VW - PAD.right / 2} y={m.y + 3}
-                  fill={m.color} fontSize="8"
-                  fontFamily="var(--font-mono)"
-                  fontWeight="700" textAnchor="middle">
-              {m.label} {fmtStrike(m.strike)}
-            </text>
-          </g>
+          <line key={`mk-line-${i}`}
+                x1={PAD.left} y1={m.y}
+                x2={PAD.left + innerW} y2={m.y}
+                stroke={m.color} strokeWidth={0.7}
+                strokeDasharray="3 3" opacity={0.5} />
         ))}
 
-        {/* Spot-price dotted line (yellow). */}
+        {/* Spot-price dotted line (yellow). Badge overlay handles the label. */}
         {spotY != null && (
-          <g>
-            <line x1={PAD.left} y1={spotY}
-                  x2={PAD.left + innerW} y2={spotY}
-                  stroke="var(--accent-yellow)"
-                  strokeWidth={1.5}
-                  strokeDasharray="6 4" />
-            <rect x={PAD.left + innerW + 4} y={spotY - 8}
-                  width={PAD.right - 8} height={16}
-                  rx={2} ry={2}
-                  fill="var(--accent-yellow)" opacity={0.95} />
-            <text x={VW - PAD.right / 2} y={spotY + 3}
-                  fill="var(--bg-primary)" fontSize="9"
-                  fontWeight="800" fontFamily="var(--font-mono)"
-                  textAnchor="middle">
-              SPOT {fmtStrike(spotPrice)}
-            </text>
-          </g>
+          <line x1={PAD.left} y1={spotY}
+                x2={PAD.left + innerW} y2={spotY}
+                stroke="var(--accent-yellow)"
+                strokeWidth={1.5}
+                strokeDasharray="6 4" />
         )}
 
-        {/* GEX MAX badge on the largest net_gex strike. */}
+        {/* GEX MAX dot on the largest net_gex strike. */}
         {maxAbsRow && (
-          <g>
-            <circle cx={xFor(maxAbsRow.net_gex)} cy={yFor(maxAbsRow.strike)}
-                    r={4}
-                    fill="var(--accent-cyan)"
-                    stroke="var(--bg-primary)" strokeWidth={1.5} />
-          </g>
+          <circle cx={xFor(maxAbsRow.net_gex)} cy={yFor(maxAbsRow.strike)}
+                  r={4}
+                  fill="var(--accent-cyan)"
+                  stroke="var(--bg-primary)" strokeWidth={1.5} />
         )}
       </svg>
+
+      {/* ─── HTML LABEL OVERLAYS (no font stretching) ─── */}
+
+      {/* Y-axis strike labels (left margin). */}
+      {labelStrikes.map((r) => (
+        <div key={`yl-${r.strike}`}
+             className="v2-gex-strikechart__ylabel"
+             style={{
+               top: `${yFor(r.strike) - 7}px`,
+               width: pctX(PAD.left - 6),
+             }}>
+          {fmtStrike(r.strike)}
+        </div>
+      ))}
+
+      {/* Center axis "0" at top. */}
+      <div className="v2-gex-strikechart__zero"
+           style={{ left: pctX(x0), top: PAD.top - 18 }}>
+        0
+      </div>
+
+      {/* X-axis numeric ticks (bottom). */}
+      {xTicks.map((t, i) => (
+        t === 0 ? null : (
+          <div key={`xt-${i}`}
+               className="v2-gex-strikechart__xlabel"
+               style={{ left: pctX(xFor(t)), top: PAD.top + innerH + 8 }}>
+            {fmtBig(t)}
+          </div>
+        )
+      ))}
+      {/* PUT ← / → CALL hint labels at bottom corners. */}
+      <div className="v2-gex-strikechart__hint v2-gex-strikechart__hint--left"
+           style={{ left: pctX(PAD.left + 4), top: PAD.top + innerH + 8 }}>
+        PUT ←
+      </div>
+      <div className="v2-gex-strikechart__hint v2-gex-strikechart__hint--right"
+           style={{ left: pctX(PAD.left + innerW - 4), top: PAD.top + innerH + 8 }}>
+        → CALL
+      </div>
+
+      {/* Marker badges (CALL WALL, PUT WALL, γ FLIP, γ MAX). */}
+      {markers.map((m, i) => (
+        <div key={`mk-badge-${i}`}
+             className="v2-gex-strikechart__marker"
+             style={{
+               left: pctX(VW - PAD.right + 4),
+               top: m.y - 9,
+               width: pctX(PAD.right - 8),
+               color: m.color,
+               borderColor: m.color,
+             }}>
+          {m.label} {fmtStrike(m.strike)}
+        </div>
+      ))}
+
+      {/* SPOT badge (yellow). */}
+      {spotY != null && (
+        <div className="v2-gex-strikechart__spot"
+             style={{
+               left: pctX(PAD.left + innerW + 4),
+               top: spotY - 10,
+               width: pctX(PAD.right - 8),
+             }}>
+          SPOT {fmtStrike(spotPrice)}
+        </div>
+      )}
 
       {/* Legend strip beneath the chart. */}
       <div className="v2-gex-strikechart__legend">
@@ -347,12 +358,83 @@ export default function GexByStrikeChart({
       </div>
 
       <style>{`
+        .v2-gex-strikechart { font-family: var(--font-mono); }
+
+        /* All overlays inherit the same base styling — small mono, no
+           wrap, pointer-events:none so they don't intercept hovers. */
+        .v2-gex-strikechart > .v2-gex-strikechart__ylabel,
+        .v2-gex-strikechart > .v2-gex-strikechart__xlabel,
+        .v2-gex-strikechart > .v2-gex-strikechart__zero,
+        .v2-gex-strikechart > .v2-gex-strikechart__hint,
+        .v2-gex-strikechart > .v2-gex-strikechart__marker,
+        .v2-gex-strikechart > .v2-gex-strikechart__spot {
+          position: absolute;
+          pointer-events: none;
+          white-space: nowrap;
+          font-family: var(--font-mono);
+          letter-spacing: 0;
+          line-height: 1;
+        }
+
+        .v2-gex-strikechart__ylabel {
+          font-size: 10px;
+          color: var(--text-tertiary);
+          text-align: right;
+          padding-right: 4px;
+          left: 0;
+        }
+        .v2-gex-strikechart__xlabel {
+          font-size: 9px;
+          color: var(--text-tertiary);
+          transform: translateX(-50%);
+        }
+        .v2-gex-strikechart__zero {
+          font-size: 10px;
+          color: var(--text-tertiary);
+          transform: translateX(-50%);
+        }
+        .v2-gex-strikechart__hint--left,
+        .v2-gex-strikechart__hint--right {
+          font-size: 9px;
+          color: var(--text-tertiary);
+        }
+        .v2-gex-strikechart__hint--right { transform: translateX(-100%); }
+
+        .v2-gex-strikechart__marker {
+          font-size: 9px;
+          font-weight: 700;
+          background: var(--bg-elevated);
+          border: 1px solid currentColor;
+          border-radius: 3px;
+          padding: 2px 4px;
+          text-align: center;
+          height: 18px;
+          line-height: 14px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .v2-gex-strikechart__spot {
+          font-size: 10px;
+          font-weight: 800;
+          color: var(--bg-primary);
+          background: var(--accent-yellow);
+          border-radius: 3px;
+          padding: 2px 4px;
+          text-align: center;
+          height: 20px;
+          line-height: 16px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
         .v2-gex-strikechart__legend {
+          position: absolute;
+          left: 0; right: 0;
+          bottom: 0;
           display: flex;
           gap: 16px;
-          padding: 8px 12px 4px;
+          padding: 4px 12px;
           font-size: 11px;
-          font-family: var(--font-mono);
           color: var(--text-tertiary);
           flex-wrap: wrap;
         }
