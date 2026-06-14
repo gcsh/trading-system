@@ -705,6 +705,59 @@ export default function TheoryChart({
       }
     }
 
+    // 2b) Zones → filled rectangles on the overlay (Phase D fix).
+    //     The price-pair line-series fallback below stays as a visual
+    //     boundary, but the FILL is what makes FVG / SMC order blocks /
+    //     Ichimoku kumo / volume-area / etc actually readable.
+    for (const [theoryName, ann] of Object.entries(allAnnotations)) {
+      if (!ann) continue;
+      const palette = palettesMap[theoryName] || { primary: '#9aa4b2' };
+      for (const zone of (ann.zones || [])) {
+        const x1raw = tsToX(zone.x1);
+        const x2raw = tsToX(zone.x2);
+        const y1raw = priceToY(zone.y1);
+        const y2raw = priceToY(zone.y2);
+        if (x1raw == null || x2raw == null
+            || y1raw == null || y2raw == null) {
+          continue;
+        }
+        // Clamp to viewport — a zone that extends past the right edge
+        // (FVG with x2='now') still paints up to the live candle.
+        const x1 = Math.min(x1raw, x2raw);
+        const x2 = Math.max(x1raw, x2raw);
+        const top = Math.min(y1raw, y2raw);
+        const bot = Math.max(y1raw, y2raw);
+        const rectW = Math.max(2, x2 - x1);
+        const rectH = Math.max(2, bot - top);
+        const colorBase = (zone.color || palette.primary || '#5fc9ce');
+        const opacity = Math.min(0.45, Math.max(0.08, zone.opacity || 0.18));
+        ctx.save();
+        // Translucent fill.
+        const alphaHex = Math.round(opacity * 255).toString(16).padStart(2, '0');
+        ctx.fillStyle = colorBase + alphaHex;
+        ctx.fillRect(x1, top, rectW, rectH);
+        // Crisp 1px border so even very faint zones show their bounds.
+        ctx.strokeStyle = colorBase;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.strokeRect(x1, top, rectW, rectH);
+        ctx.setLineDash([]);
+        // Inline label at the top-left (only if there's room).
+        if (zone.label && rectW > 60 && rectH > 14) {
+          ctx.font = '10px Inter, system-ui, sans-serif';
+          const t = zone.label;
+          const tw = ctx.measureText(t).width;
+          ctx.fillStyle = 'rgba(10, 14, 26, 0.7)';
+          ctx.fillRect(x1 + 4, top + 3, tw + 8, 14);
+          ctx.fillStyle = colorBase;
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'top';
+          ctx.fillText(t, x1 + 8, top + 5);
+        }
+        ctx.restore();
+      }
+    }
+
     // 3) Signal flag markers — MITS-P10.3.3 prominent (24px arrow + price label).
     //
     // Each marker is now a much larger arrow (16px tall) anchored on the
