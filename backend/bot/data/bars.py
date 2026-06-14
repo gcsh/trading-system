@@ -108,10 +108,80 @@ def _interval_to_label(interval: str) -> Optional[str]:
     return m.get(interval.lower())
 
 
+def _fetch_bars_from_cache(
+    ticker: str, *, interval: str, lookback_days: int,
+) -> Optional[List[Dict[str, Any]]]:
+    """Read from the silver-layer ``stock_bars`` table populated by the
+    Phase 11.B ThetaData backfill (20y daily / 5y intraday). This is the
+    primary path for long-range queries because ThetaData's live EOD
+    endpoint is capped at 365 days per request — anything wider
+    requires chunking, which is what the backfill already did.
+
+    Returns ``None`` when the cache has fewer than ~50% of the expected
+    rows (then caller falls through to the live ThetaData fetch + a
+    final yfinance fallback)."""
+    try:
+        from sqlalchemy import select
+        from backend.db import session_scope
+        from backend.models.stock_bar import StockBar
+    except Exception:
+        return None
+    try:
+        end = date.today()
+        start = end - timedelta(days=max(1, lookback_days))
+        # Map fetcher's interval slug to the column form the backfill
+        # stored. The two namespaces match for 1d / 5m / 15m / 30m / 1m;
+        # we normalize 1h/60m so a single intra-hour query hits the
+        # cache regardless of which slug the caller used.
+        iv_cache = "60m" if interval.lower() in ("1h", "60m") else interval.lower()
+        with session_scope() as sess:
+            rows = sess.scalars(
+                select(StockBar)
+                .where(StockBar.ticker == ticker.upper())
+                .where(StockBar.interval == iv_cache)
+                .where(StockBar.bar_ts >= datetime.combine(
+                    start, datetime.min.time()))
+                .where(StockBar.bar_ts <= datetime.combine(
+                    end, datetime.max.time()))
+                .order_by(StockBar.bar_ts.asc())
+            ).all()
+    except Exception:
+        logger.debug("stock_bars cache read failed", exc_info=True)
+        return None
+    if not rows:
+        return None
+    # Sanity floor — if the cache only carries a sliver of the requested
+    # window, prefer to fall through to live so we don't render a chart
+    # that looks broken to the operator.
+    if interval == "1d":
+        # ~252 trading days/year. Require ≥30% of the requested span
+        # so partial-backfill tickers don't masquerade as complete.
+        expected = max(5, int(lookback_days * 252 / 365 * 0.30))
+        if len(rows) < expected:
+            return None
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        ts = r.bar_ts.isoformat() if r.bar_ts else None
+        if not ts:
+            continue
+        out.append({
+            "t": ts,
+            "open":   float(r.open)   if r.open   is not None else None,
+            "high":   float(r.high)   if r.high   is not None else None,
+            "low":    float(r.low)    if r.low    is not None else None,
+            "close":  float(r.close)  if r.close  is not None else None,
+            "volume": float(r.volume) if r.volume is not None else 0.0,
+        })
+    # Drop zero-OHLC rows (weekends/holidays that snuck in).
+    out = [b for b in out if (b["open"] or 0) > 0 and (b["close"] or 0) > 0]
+    return out or None
+
+
 def _fetch_bars_thetadata(
     ticker: str, *, interval: str, lookback_days: int,
 ) -> Optional[List[Dict[str, Any]]]:
-    """Try ThetaData first. Returns ``None`` on timeout, 4xx/5xx, or
+    """Try ThetaData live (request bounded to ≤364 days to stay under
+    the EOD endpoint cap). Returns ``None`` on timeout, 4xx/5xx, or
     empty payload so the caller can fall back."""
     try:
         import requests
@@ -119,7 +189,12 @@ def _fetch_bars_thetadata(
         return None
     try:
         end = date.today()
-        start = end - timedelta(days=max(1, lookback_days))
+        # ThetaData EOD endpoint is hard-capped at 365 days per call;
+        # long-range queries are served from the silver cache instead
+        # (see ``_fetch_bars_from_cache``). Clamp so we never trip
+        # the cap when the cache layer punted.
+        clamped = min(max(1, lookback_days), 364)
+        start = end - timedelta(days=clamped)
         base = _thetadata_base_url()
         # ThetaData v3 endpoints expect compact YYYYMMDD; ISO form
         # (`YYYY-MM-DD`) silently returns 4xx and the caller falls
@@ -329,21 +404,32 @@ def fetch_bars(ticker: str, *, window: str = "today",
 
     providers = []
     if prefer == "yfinance":
-        providers = ["yfinance", "thetadata"]
+        providers = ["yfinance", "thetadata_cache", "thetadata"]
     else:
-        providers = ["thetadata", "yfinance"]
+        # thetadata_cache before live: the silver `stock_bars` table
+        # carries the Phase-11 backfill (20y daily / 5y intraday) so
+        # long-range queries are served instantly and we don't bounce
+        # off the live EOD endpoint's 365-day cap.
+        providers = ["thetadata_cache", "thetadata", "yfinance"]
     for name in providers:
-        if name == "thetadata":
+        if name == "thetadata_cache":
+            bars = _fetch_bars_from_cache(
+                ticker, interval=iv, lookback_days=look,
+            )
+            source_label = "thetadata"
+        elif name == "thetadata":
             bars = _fetch_bars_thetadata(
                 ticker, interval=iv, lookback_days=look,
             )
+            source_label = "thetadata"
         else:
             bars = _fetch_bars_yfinance(
                 ticker, interval=iv, lookback_days=look,
             )
+            source_label = "yfinance"
         if bars:
             result["bars"] = bars
-            result["source"] = name
+            result["source"] = source_label
             # MITS Phase 8.2 — capture raw bars into the bronze lake
             # (gated by TUNABLES.lake_bronze_enabled). Fire-and-forget;
             # never blocks the fetch path.
