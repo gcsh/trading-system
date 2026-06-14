@@ -31,6 +31,15 @@ class TestFreshStartContract:
             # we don't push stale alerts about the previous run's
             # trades that no longer exist after the reset.
             "telegram_outbox",
+            # MITS Phase 16.B / 18.B — decision provenance + the
+            # counterfactual replay cache keyed off provenance_id.
+            "decision_provenance",
+            "counterfactual_replays",
+            # Fix N=6 (2026-06-13) — child tables of trades that
+            # carry FK to trades.id. Must wipe before the parent so
+            # fresh_start doesn't crash on FK constraint failure.
+            "eod_prediction_outcomes",
+            "brain_predictions",
         }
         assert labels == expected, (
             f"PAPER_STATE_TABLES changed. New: {labels - expected}. "

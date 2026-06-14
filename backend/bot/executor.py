@@ -140,6 +140,7 @@ class Executor:
         quantity: int,
         strike: float,
         expiration: str,
+        option_type_override: Optional[str] = None,  # Fix N=1 — kept for signature parity
     ) -> OrderResult:
         action = action.upper()
         if self.paper_mode:

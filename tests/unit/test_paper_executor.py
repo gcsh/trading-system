@@ -110,10 +110,15 @@ def test_paper_options_buy_debits_cash(temp_db):
 
 
 def test_paper_options_sell_credits_cash(temp_db):
-    ex = PaperExecutor(starting_cash=1_000.0, price_fn=_price)
+    # Fix N=2 (2026-06-13) — SELL_CSP now requires strike × 100
+    # cash collateral up front. Bumped from $1k to $11k so the
+    # collateral check (strike 100 × 100 = $10k) passes and the
+    # original assertion (cash credited above starting balance)
+    # still holds.
+    ex = PaperExecutor(starting_cash=11_000.0, price_fn=_price)
     ex.place_options_order("AAPL", "SELL_CSP", 1, strike=100.0, expiration="2026-06-21")
     state = ex.get_account_state()
-    assert state["cash"] > 1_000.0  # we collected premium
+    assert state["cash"] > 11_000.0  # we collected premium
 
 
 def test_login_always_succeeds(temp_db):

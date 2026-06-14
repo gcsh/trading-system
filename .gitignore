@@ -84,3 +84,8 @@ playwright/.cache/
 scratch/
 tmp/
 temp/
+
+# Runtime ML training artifacts (engine generates these)
+ml/registry/*.json
+ml/registry/*.pkl
+!ml/registry/active.json

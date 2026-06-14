@@ -967,6 +967,139 @@ def rule_portfolio_context_failed(
     return None
 
 
+def rule_naked_short_block(
+    ctx: PolicyContext,
+) -> Optional[BlockingFactor]:
+    """Fix N=4 — refuse naked option writes and unbacked covered
+    structures.
+
+    Three branches:
+
+    * ``SELL_CALL`` / ``SELL_PUT`` — naked shorts. Engine has no
+      facility for matching cash + share margin requirements, so we
+      block outright. The 2026-06-13 trial blew up writing 14 naked
+      short calls on a $5k account because the executor (Fix N=1)
+      was mis-routing CSPs into this bucket. Even with the routing
+      fixed, naked shorts are off-limits.
+    * ``SELL_COVERED_CALL`` — requires ``100 × contracts`` long shares
+      of the underlying. Reads ``ctx.executor.positions()`` and sums
+      the open long-stock quantity for the ticker.
+    * ``SELL_CSP`` — requires ``strike × 100 × contracts`` cash.
+      Reads ``ctx.account.cash``.
+
+    Anything else passes through.
+    """
+    signal = ctx.signal
+    action = signal.action.value if hasattr(signal.action, "value") else str(
+        signal.action
+    )
+    action = action.upper()
+
+    if action not in (
+        "SELL_CALL", "SELL_PUT", "SELL_COVERED_CALL", "SELL_CSP",
+    ):
+        return None
+
+    # Number of contracts the signal wants to write. We don't have the
+    # sized quantity yet (RiskManager runs later), so use signal.metadata
+    # or default to 1 — the SAFER assumption when we don't know.
+    md = signal.metadata or {}
+    try:
+        contracts = int(md.get("contracts") or md.get("quantity") or 1)
+    except (TypeError, ValueError):
+        contracts = 1
+    if contracts < 1:
+        contracts = 1
+
+    # Strike for CSP cash collateral — use signal.strike or metadata.
+    try:
+        strike = float(signal.strike) if signal.strike else float(
+            md.get("strike") or 0.0
+        )
+    except (TypeError, ValueError):
+        strike = 0.0
+
+    if action in ("SELL_CALL", "SELL_PUT"):
+        return BlockingFactor(
+            category="risk", rule="naked_short_block", severity="hard",
+            reason=(
+                f"naked {action} blocked — no facility for "
+                f"unlimited-loss positions"
+            ),
+            evidence={
+                "action": action,
+                "cash_required": None,
+                "cash_have": float(getattr(ctx.account, "cash", 0.0) or 0.0),
+                "shares_required": None,
+                "shares_have": None,
+            },
+            legacy_status="naked_short_block",
+        )
+
+    if action == "SELL_COVERED_CALL":
+        shares_required = 100 * contracts
+        # Sum long-stock quantity across executor positions for the
+        # ticker. Short stock doesn't cover a short call.
+        shares_have = 0
+        try:
+            positions = (
+                ctx.executor.positions() if ctx.executor is not None else []
+            ) or []
+        except Exception:
+            positions = []
+        for p in positions:
+            try:
+                if (p.get("kind") == "stock"
+                        and (p.get("ticker") or "").upper()
+                        == ctx.ticker.upper()):
+                    qty = float(p.get("quantity") or 0)
+                    if qty > 0:
+                        shares_have += int(qty)
+            except Exception:
+                continue
+        if shares_have >= shares_required:
+            return None
+        return BlockingFactor(
+            category="risk", rule="naked_short_block", severity="hard",
+            reason=(
+                f"SELL_COVERED_CALL needs {shares_required} shares of "
+                f"{ctx.ticker}; have {shares_have}"
+            ),
+            evidence={
+                "action": action,
+                "contracts": contracts,
+                "cash_required": None,
+                "cash_have": float(getattr(ctx.account, "cash", 0.0) or 0.0),
+                "shares_required": shares_required,
+                "shares_have": shares_have,
+            },
+            legacy_status="naked_short_block",
+        )
+
+    # action == "SELL_CSP"
+    cash_required = float(strike) * 100.0 * float(contracts)
+    cash_have = float(getattr(ctx.account, "cash", 0.0) or 0.0)
+    if cash_have >= cash_required and cash_required > 0:
+        return None
+    return BlockingFactor(
+        category="risk", rule="naked_short_block", severity="hard",
+        reason=(
+            f"SELL_CSP needs ${cash_required:,.2f} cash collateral; "
+            f"have ${cash_have:,.2f}"
+        ),
+        evidence={
+            "action": action,
+            "contracts": contracts,
+            "strike": strike,
+            "cash_required": cash_required,
+            "cash_have": cash_have,
+            "shares_required": None,
+            "shares_have": None,
+        },
+        legacy_status="naked_short_block",
+    )
+
+
 def rule_correlation_cap_block(
     ctx: PolicyContext,
 ) -> Optional[BlockingFactor]:
@@ -1519,6 +1652,12 @@ def _register_all(policy: DecisionPolicy) -> None:
     policy.register(PolicyRule(
         "portfolio_context_failed", "data_quality", "hard",
         rule_portfolio_context_failed,
+    ))
+    # Fix N=4 — naked-short refusal + covered-call shares check + CSP
+    # cash collateral. Registered BEFORE correlation_cap_block so the
+    # safety veto fires early in the chain.
+    policy.register(PolicyRule(
+        "naked_short_block", "risk", "hard", rule_naked_short_block,
     ))
     policy.register(PolicyRule(
         "correlation_cap_block", "portfolio", "hard",

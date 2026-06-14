@@ -100,7 +100,11 @@ class TestOrderPlanShape:
         eng = _make_engine()
         sig = Signal(ticker="NVDA", action=Action.SELL_CSP, confidence=0.7,
                       reason="t", strategy="csp", strike=None)
-        plan = eng.build_order_plan(sig, quantity=1, price=214.0)
+        # Fix N=3 (2026-06-13) — quantity must clear $10k threshold for
+        # build_order_plan to size ≥1 contract; otherwise the plan
+        # comes back with skip=True. Bumped from 1 to 100 (notional
+        # 100 × 214 = $21,400 → 2 contracts).
+        plan = eng.build_order_plan(sig, quantity=100, price=214.0)
         # NVDA 5% OTM put: 214 * 0.95 = 203.3 → snap to 205
         assert plan["instrument"] == "option"        # not "spread"
         assert plan["option_type"] == "put"
@@ -112,7 +116,8 @@ class TestOrderPlanShape:
         eng = _make_engine()
         sig = Signal(ticker="MSFT", action=Action.SELL_COVERED_CALL, confidence=0.7,
                       reason="t", strategy="cc", strike=None)
-        plan = eng.build_order_plan(sig, quantity=1, price=433.0)
+        # Fix N=3 — quantity bumped to clear the $10k sizing threshold.
+        plan = eng.build_order_plan(sig, quantity=100, price=433.0)
         # MSFT 3% OTM call: 433 * 1.03 = 446.0 → snap to 445
         assert plan["instrument"] == "option"
         assert plan["option_type"] == "call"
@@ -123,7 +128,8 @@ class TestOrderPlanShape:
         eng = _make_engine()
         sig = Signal(ticker="NVDA", action=Action.BUY_CALL, confidence=0.7,
                       reason="t", strategy="trend", strike=None)
-        plan = eng.build_order_plan(sig, quantity=1, price=215.35)
+        # Fix N=3 — quantity bumped to clear the $10k sizing threshold.
+        plan = eng.build_order_plan(sig, quantity=100, price=215.35)
         # the bug-report value: 215.35 must NOT become the strike
         assert plan["strike"] == 215.0
         assert plan["instrument"] == "option"

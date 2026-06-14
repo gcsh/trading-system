@@ -62,6 +62,25 @@ def _apply_option_spread(mid_price: float, side: str) -> float:
     return mid_price + half if side.upper() == "BUY" else mid_price - half
 
 
+# Fix N=1 — explicit action → option_type mapping.
+#
+# Previously the executor derived ``right`` with a substring check on
+# the action string ("CALL" in action) with "call" as the default. That
+# silently mapped SELL_CSP → "call" because the string contained neither
+# "CALL" nor "PUT" — turning every cash-secured PUT into a naked short
+# CALL. This dict makes the mapping explicit; unknown actions raise.
+ACTION_TO_OPTION_TYPE = {
+    "BUY_CALL":          "call",
+    "SELL_CALL":         "call",
+    "BUY_PUT":           "put",
+    "SELL_PUT":          "put",
+    "SELL_CSP":          "put",   # cash-secured put
+    "BUY_CSP":           "put",   # close a CSP (buy-to-close)
+    "SELL_COVERED_CALL": "call",
+    "BUY_COVERED_CALL":  "call",  # close a covered call (buy-to-close)
+}
+
+
 @dataclass
 class PaperOrderResult:
     success: bool
@@ -782,6 +801,7 @@ class PaperExecutor:
         quantity: int,
         strike: float,
         expiration: str,
+        option_type_override: Optional[str] = None,
     ) -> PaperOrderResult:
         """Single-leg options fill via real ThetaData chain quote with
         Black-Scholes fallback (P2.2).
@@ -797,13 +817,33 @@ class PaperExecutor:
         Stores entry_bid/ask/mid/iv/delta/gamma/theta/vega on the
         PaperPosition row so the MTM repricer (P2.3) can compute a
         consistent mark when the chain is unavailable mid-cycle.
+
+        Fix N=1 — ``right`` is derived from ``ACTION_TO_OPTION_TYPE``
+        with an explicit fail on unknown actions (the legacy substring
+        check defaulted to "call" and turned SELL_CSP into a short call).
+        ``option_type_override`` lets the engine pass ``plan["option_type"]``
+        through belt-and-braces; when provided it wins over the action map.
         """
         from backend.bot.options.pricing import price_at_entry
         action = action.upper()
-        # Right is derived from the action (BUY_CALL / SELL_PUT / etc.)
-        right = "call" if "CALL" in action else (
-            "put" if "PUT" in action else "call"
-        )
+        # Fix N=1 — explicit mapping, fail loud on unknown action.
+        if option_type_override:
+            right = str(option_type_override).lower()
+            if right not in ("call", "put"):
+                return PaperOrderResult(
+                    False, None,
+                    error=(
+                        f"invalid option_type_override "
+                        f"{option_type_override!r}"
+                    ),
+                )
+        else:
+            right = ACTION_TO_OPTION_TYPE.get(action)
+            if right is None:
+                return PaperOrderResult(
+                    False, None,
+                    error=f"unknown option action {action!r}",
+                )
         # Pull a real mid from ThetaData (BS fallback if stale/missing).
         spot = self._price(ticker)
         mark = price_at_entry(
@@ -854,6 +894,47 @@ class PaperExecutor:
                     )
                 account.cash -= cost
             else:
+                # Fix N=2 — collateral check before crediting premium.
+                # Real brokers require cash (CSP) or shares (covered
+                # call) backing every short option write. Naked shorts
+                # are refused outright; the policy layer (Fix N=4)
+                # blocks them upstream but we defend in depth here too.
+                if action == "SELL_CSP":
+                    required = float(strike) * 100.0 * float(quantity)
+                    if account.cash < required:
+                        return PaperOrderResult(
+                            False, None,
+                            error=(
+                                f"SELL_CSP requires "
+                                f"${required:,.2f} cash collateral; "
+                                f"have ${account.cash:,.2f}"
+                            ),
+                        )
+                    # Collateral is "reserved" implicitly: the SELL_CSP
+                    # position MTM captures the put liability so the
+                    # net account value already reflects encumbrance.
+                    # We just enforce the cash exists at write-time.
+                elif action == "SELL_COVERED_CALL":
+                    # Underlying-shares requirement is enforced by the
+                    # naked_short policy rule (Fix N=4). At the
+                    # executor we only need cash to pay commission.
+                    if account.cash < commission:
+                        return PaperOrderResult(
+                            False, None,
+                            error=(
+                                f"insufficient cash for commission "
+                                f"${commission:.2f}"
+                            ),
+                        )
+                else:
+                    # Naked SELL_CALL / SELL_PUT — refused. Fix N=4
+                    # blocks these via PolicyRule, but defense in depth
+                    # here means a regression upstream can't write a
+                    # naked short to the paper account.
+                    return PaperOrderResult(
+                        False, None,
+                        error=f"naked short {action} blocked at executor",
+                    )
                 # Selling premium: credit cash MINUS commission.
                 account.cash += premium_total - commission
             # MITS Phase 17.A item #11 — pricing_source is the trade-row

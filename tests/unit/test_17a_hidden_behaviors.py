@@ -463,8 +463,12 @@ def test_9_assignment_writes_second_stock_trade(temp_db, monkeypatch):
         "backend.bot.options.pricing.price_at_entry",
         lambda **kw: fake_mark,
     )
+    # Fix N=2 (2026-06-13) — naked SELL_PUT is now blocked at the
+    # executor; the test seeds an equivalent CSP (cash-secured put)
+    # which is the legitimate short-put structure. starting_cash=$20k
+    # covers the strike=$100 × 100 = $10k collateral requirement.
     res = ex.place_options_order(
-        "AAPL", "SELL_PUT", 1, strike=100.0,
+        "AAPL", "SELL_CSP", 1, strike=100.0,
         expiration="2026-12-19",
     )
     assert res.success

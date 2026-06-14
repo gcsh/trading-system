@@ -236,16 +236,45 @@ def _known_strategies() -> set:
     return registered | set(_SYSTEM_STRATEGY_SOURCES)
 
 
+# Fix N=5 — every (action, option_type) pair that may legitimately land
+# on a Trade row. The 2026-06-13 incident wrote SELL_CSP rows with
+# option_type="call" because a substring check in the executor
+# defaulted to call when neither "CALL" nor "PUT" appeared in the
+# action string. This invariant is defense-in-depth: even if Fix N=1
+# regresses, a mismatched pair fails the writability check.
+_VALID_ACTION_OPTION_PAIRS = frozenset({
+    ("BUY_CALL",          "call"),
+    ("SELL_CALL",         "call"),
+    ("BUY_PUT",           "put"),
+    ("SELL_PUT",          "put"),
+    ("SELL_CSP",          "put"),
+    ("BUY_CSP",           "put"),
+    ("SELL_COVERED_CALL", "call"),
+    ("BUY_COVERED_CALL",  "call"),
+    # CLOSE_OPTION is the exit manager's force-close action. It
+    # legitimately appears with either call or put depending on the
+    # contract being closed — the option_type field on the row reflects
+    # the original opening leg.
+    ("CLOSE_OPTION",      "call"),
+    ("CLOSE_OPTION",      "put"),
+})
+
+
 def verify_trade_writable(trade: Any) -> None:
     """Reject Trade rows that would pollute the live DB.
 
-    Two invariants:
+    Three invariants:
     1. ``ticker`` must not begin with ``_`` — that prefix is reserved for
        test-suite sentinels and never appears on a real fill.
     2. ``strategy`` must be either a registered strategy or one of the
        known system signal-source pseudo-strategies. A typo (e.g.
        ``"rsi_mean_revision"`` instead of ``"rsi_mean_reversion"``) would
        silently break per-strategy attribution; we'd rather raise.
+    3. (Fix N=5) For ``instrument="option"`` rows that carry an
+       ``option_type``, the ``(action, option_type)`` pair must appear
+       in ``_VALID_ACTION_OPTION_PAIRS``. Mismatched pairs (e.g.
+       SELL_CSP + option_type="call") indicate an upstream routing
+       regression and must never be persisted.
 
     Raises ``AuditViolation`` on failure. Wire into the persist path BEFORE
     ``session.add(trade)`` so a bad row never lands."""
@@ -264,6 +293,24 @@ def verify_trade_writable(trade: Any) -> None:
             {"strategy": strategy,
               "known": sorted(_known_strategies())},
         )
+    # Fix N=5 — action/option_type consistency. Only enforced when the
+    # row is an option AND carries an option_type. Stock rows
+    # (instrument="stock", option_type=None) are unaffected; option
+    # rows that haven't yet had option_type stamped (e.g. mid-pipeline
+    # writes) also pass — the strike-snap / instrument-mismatch checks
+    # in audit_order_plan already cover those cases.
+    instrument = (getattr(trade, "instrument", None) or "").lower()
+    option_type = getattr(trade, "option_type", None)
+    action = getattr(trade, "action", None) or ""
+    if instrument == "option" and option_type:
+        pair = (str(action), str(option_type).lower())
+        if pair not in _VALID_ACTION_OPTION_PAIRS:
+            raise AuditViolation(
+                "trade_action_option_type_mismatch",
+                f"Trade action={action!r} option_type={option_type!r} "
+                f"is inconsistent — refusing write.",
+                {"action": action, "option_type": option_type},
+            )
 
 
 def audit_open_options(positions: List[dict]) -> AuditResult:

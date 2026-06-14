@@ -2462,6 +2462,20 @@ class BotEngine:
         plan["stop_loss_price"] = plan.get("stop_loss_price") or decision.stop_loss_price
         plan["take_profit_price"] = plan.get("take_profit_price") or decision.take_profit_price
 
+        # Fix N=3 — build_order_plan stamps ``skip=True`` when the
+        # risk-sized quantity didn't justify a single contract. Honor it
+        # BEFORE running the audit / submit so a 0-contract signal lands
+        # in the events log as a transparent skip instead of a "failed"
+        # submission.
+        if plan.get("skip"):
+            event["status"] = "skipped"
+            event["reason"] = plan.get(
+                "skip_reason", "risk_size_below_one_contract"
+            )
+            event["quantity"] = 0
+            event["instrument"] = plan.get("instrument")
+            return event
+
         audit = audit_order_plan(signal.action.value, plan)
         if not audit.ok:
             event["audit_violations"] = audit.violations
@@ -4161,7 +4175,20 @@ class BotEngine:
             return arithmetic_strike
 
         if action in SINGLE_LEG_OPTIONS:
-            contracts = max(1, int(quantity * price / 10_000)) if price else 1
+            # Fix N=3 — drop the legacy max(1, …) floor. A sub-threshold
+            # sizing decision is the RiskManager saying "don't do this";
+            # force-promoting to 1 contract turns small accounts into
+            # over-leveraged options books (the GS $1010 strike incident).
+            contracts = int(quantity * price / 10_000) if price else 0
+            if contracts <= 0:
+                plan.update(
+                    instrument="option",
+                    contracts=0,
+                    quantity=0,
+                    skip=True,
+                    skip_reason="risk_size_below_one_contract",
+                )
+                return plan
             option_type = "call" if action == Action.BUY_CALL else "put"
             if signal.strike:
                 strike = float(signal.strike)
@@ -4201,7 +4228,17 @@ class BotEngine:
 
         if action in SINGLE_LEG_SHORT_OPTIONS:
             # Cash-Secured Put / Covered Call — ONE short option leg. Not a spread.
-            contracts = max(1, int(quantity * price / 10_000)) if price else 1
+            # Fix N=3 — same floor removal as SINGLE_LEG_OPTIONS above.
+            contracts = int(quantity * price / 10_000) if price else 0
+            if contracts <= 0:
+                plan.update(
+                    instrument="option",
+                    contracts=0,
+                    quantity=0,
+                    skip=True,
+                    skip_reason="risk_size_below_one_contract",
+                )
+                return plan
             option_type = "put" if action == Action.SELL_CSP else "call"
             expiration = signal.metadata.get("expiration") or self._default_expiration(signal.dte)
             # Sensible default if the strategy didn't supply one (CSP = 5% OTM put,
@@ -4235,7 +4272,18 @@ class BotEngine:
             return plan
 
         # Multi-leg / true spreads.
-        contracts = max(1, int(quantity * price / 10_000)) if price else 1
+        # Fix N=3 — same floor removal: a sub-threshold spread is a
+        # signal to skip, not to force-write one contract.
+        contracts = int(quantity * price / 10_000) if price else 0
+        if contracts <= 0:
+            plan.update(
+                instrument="spread",
+                contracts=0,
+                quantity=0,
+                skip=True,
+                skip_reason="risk_size_below_one_contract",
+            )
+            return plan
         expiration = signal.metadata.get("expiration") or self._default_expiration(signal.dte)
         opt = "call" if action in (Action.BULL_CALL_SPREAD,) else (
             "put" if action in () else "mixed"
@@ -4274,12 +4322,18 @@ class BotEngine:
             return self.executor.place_stock_order(signal.ticker, plan["side"], plan["quantity"])
 
         if action in SINGLE_LEG_OPTIONS or action in SINGLE_LEG_SHORT_OPTIONS:
+            # Fix N=1 — pass the plan-derived option_type through so the
+            # executor doesn't have to re-derive it from the action
+            # string. Belt-and-braces: the engine already validated the
+            # option type when it built the plan; the override ensures
+            # an executor regression can't silently flip put/call.
             return self.executor.place_options_order(
                 signal.ticker,
                 action.value,
                 quantity=plan["contracts"],
                 strike=plan["strike"],
                 expiration=plan["expiration"],
+                option_type_override=plan.get("option_type"),
             )
 
         logger.info(

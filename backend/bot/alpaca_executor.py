@@ -148,6 +148,7 @@ class AlpacaExecutor:
         quantity: int,
         strike: float,
         expiration: str,
+        option_type_override: Optional[str] = None,  # Fix N=1 — accepted for signature parity
     ) -> AlpacaOrderResult:
         """Submit a single-leg options order.
 

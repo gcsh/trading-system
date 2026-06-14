@@ -33,9 +33,11 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from backend.db import session_scope
+from backend.models.brain_prediction import BrainPrediction
 from backend.models.counterfactual_replay import CounterfactualReplay
 from backend.models.decision_log import DecisionLog
 from backend.models.decision_provenance import DecisionProvenance
+from backend.models.eod_prediction_outcome import EodPredictionOutcome
 from backend.models.execution_log import ExecutionLog
 from backend.models.paper import PaperAccount, PaperPosition
 from backend.models.regime_episode import RegimeEpisodeSnapshot
@@ -58,6 +60,14 @@ PAPER_STATE_TABLES = [
     # cache from holding dangling references.
     (CounterfactualReplay,   "counterfactual_replays"),
     (DecisionProvenance,     "decision_provenance"),
+    # Fix N=6 — eod_prediction_outcomes + brain_predictions both
+    # FK trades.id. The 2026-06-13 fresh_start crashed with a
+    # FOREIGN KEY constraint failure because these were classified
+    # as external-cache tables (preserved across resets) while the
+    # parent ``trades`` row was being deleted. Wipe them BEFORE
+    # ``trades`` so the FK constraint holds during the bulk delete.
+    (EodPredictionOutcome,   "eod_prediction_outcomes"),
+    (BrainPrediction,        "brain_predictions"),
     (Trade,                  "trades"),
     (DecisionLog,            "decision_log"),
     (ExecutionLog,           "execution_log"),
@@ -102,11 +112,6 @@ EXTERNAL_CACHE_TABLES = [
     # the public corpus + AI, not from bot decisions. Keep on reset so
     # operators can audit yesterday's setups even after a wipe.
     "eod_analysis",
-    # MITS Phase 5 — prediction→outcome reconcile rows. Derived from
-    # EOD analysis + closed trades; the historical accuracy ledger
-    # survives resets so the operator can audit prediction quality
-    # across trial restarts.
-    "eod_prediction_outcomes",
     # MITS Phase 6 — recursive learning loop tables. All derive from
     # corpus posteriors / closed-trade outcomes; the live-outcome
     # learning history MUST survive `fresh_start` so the corpus
