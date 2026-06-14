@@ -1012,6 +1012,47 @@ export default function StockAnalysis() {
     return Object.keys(data.knowledge).sort();
   }, [data]);
 
+  // ── Memoize chart inputs (D.4 perf fix) ─────────────────────────
+  // Before this, the IIFE below rebuilt `annotations` + `palettes` as
+  // fresh objects on every render. Any unrelated state change (adding
+  // a drawing, a live tick, toggling the Cmd-K palette) cascaded into
+  // TheoryChart's annotation effect, which tore down every overlay
+  // line series and re-added them. With a few theories active that's
+  // tens of thousands of points re-uploaded — which is why "draw a
+  // line, wait a minute, line appears".
+  const visibleObs = useMemo(() => (
+    (data?.observations || []).filter((o) => !hiddenOverlays[o.family])
+  ), [data?.observations, hiddenOverlays]);
+
+  const visibleFams = useMemo(() => Array.from(new Set(
+    visibleObs.map((o) => o.family).filter(Boolean),
+  )), [visibleObs]);
+
+  const detectorAnnotations = useMemo(
+    () => mapObservationsToAnnotations(visibleObs, FAMILY_COLORS),
+    [visibleObs],
+  );
+
+  const chartAnnotations = useMemo(() => ({
+    ...detectorAnnotations,
+    ...(theoryAnnotations || {}),
+  }), [detectorAnnotations, theoryAnnotations]);
+
+  const chartPalettes = useMemo(() => {
+    const palettes = buildAnnotationPalettes(visibleFams, FAMILY_COLORS);
+    for (const tid of Object.keys(theoryAnnotations || {})) {
+      const meta = THEORY_BY_ID[tid];
+      const c = meta?.color || '#9aa5b2';
+      palettes[tid] = { primary: c, secondary: c, tertiary: c };
+    }
+    return palettes;
+  }, [visibleFams, theoryAnnotations]);
+
+  const primaryTheory = useMemo(
+    () => Object.keys(chartAnnotations)[0] || null,
+    [chartAnnotations],
+  );
+
   const goTicker = (next) => {
     if (!next) return;
     navigate(`/analysis/${encodeURIComponent(next.toUpperCase())}?window=${window}`);
@@ -1173,28 +1214,12 @@ export default function StockAnalysis() {
                   return next;
                 });
               };
-              const visibleObs = (data.observations || []).filter(
-                (o) => !hiddenOverlays[o.family],
-              );
-              const visibleFams = Array.from(new Set(
-                visibleObs.map((o) => o.family).filter(Boolean),
-              ));
-              const detectorAnnotations = mapObservationsToAnnotations(
-                visibleObs, FAMILY_COLORS,
-              );
-              // Phase C.2 — merge detector annotations with the
-              // backend theory overlays (Bollinger / MACD / RSI div /
-              // …). TheoryChart renders each key as its own theory.
-              const annotations = {
-                ...detectorAnnotations,
-                ...(theoryAnnotations || {}),
-              };
-              const palettes = buildAnnotationPalettes(visibleFams, FAMILY_COLORS);
-              for (const tid of Object.keys(theoryAnnotations || {})) {
-                const meta = THEORY_BY_ID[tid];
-                const c = meta?.color || '#9aa5b2';
-                palettes[tid] = { primary: c, secondary: c, tertiary: c };
-              }
+              // D.4 perf: visibleObs / visibleFams / annotations /
+              // palettes are now memoized at the component level above
+              // so they keep stable references across drawing edits
+              // and live ticks. We just read them here.
+              const annotations = chartAnnotations;
+              const palettes = chartPalettes;
 
               // Phase C.1 — Thesis Context accordion. Replaces the
               // prior flat stack with collapsible sections so the
@@ -1308,7 +1333,7 @@ export default function StockAnalysis() {
                           bars={barsForChart}
                           annotations={annotations}
                           palettes={palettes}
-                          primaryTheory={Object.keys(annotations)[0] || null}
+                          primaryTheory={primaryTheory}
                           liveTick={liveTick}
                           hideLegend
                           onReady={setChartRefs}
