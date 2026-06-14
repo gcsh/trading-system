@@ -486,12 +486,26 @@ def create_app() -> FastAPI:
 
         app.mount("/assets", _ImmutableStaticFiles(directory=dist_dir / "assets"), name="assets")
 
+        # The SPA shell (index.html) is unhashed and must always be
+        # revalidated so a fresh deploy lands without a hard refresh.
+        # Without this header, browsers/Cloudflare cache the old shell
+        # indefinitely; the old shell references stale /assets/* hashes
+        # that may have been deleted from disk → blank UI.
+        _SHELL_HEADERS = {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+
         @app.get("/", response_class=HTMLResponse)
-        async def index() -> str:
-            return (dist_dir / "index.html").read_text()
+        async def index() -> HTMLResponse:
+            return HTMLResponse(
+                (dist_dir / "index.html").read_text(),
+                headers=_SHELL_HEADERS,
+            )
 
         @app.get("/{path:path}", response_class=HTMLResponse)
-        async def spa_fallback(path: str) -> str:
+        async def spa_fallback(path: str) -> HTMLResponse:
             # API routers are registered before this catch-all, so anything that
             # reaches here is a client-side route. Serve index.html so React
             # Router can handle it (deep-links / refresh work on every page).
@@ -502,7 +516,10 @@ def create_app() -> FastAPI:
                 from fastapi import HTTPException
 
                 raise HTTPException(status_code=404, detail="not found")
-            return (dist_dir / "index.html").read_text()
+            return HTMLResponse(
+                (dist_dir / "index.html").read_text(),
+                headers=_SHELL_HEADERS,
+            )
     else:
 
         @app.get("/")
