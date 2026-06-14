@@ -114,7 +114,12 @@ export default function GexDashboard() {
   const navigate = useNavigate();
   const ticker = (rawTicker || 'SPY').toUpperCase();
 
-  const { data: gex, error: gexErr, loading } = useGex(ticker, { refreshMs: 30_000 });
+  // DTE bucket — 0DTE / 1d / 5d / 7d / 14d / 30d / 60d / all. The
+  // backend accepts the matching `expiration=` query param. Default
+  // `all` is the legacy front-month aggregation.
+  const [expiration, setExpiration] = useState('all');
+  const EXPIRATION_BUCKETS = ['0d', '1d', '5d', '7d', '14d', '30d', '60d', 'all'];
+  const { data: gex, error: gexErr, loading } = useGex(ticker, { refreshMs: 30_000, expiration });
   const { tick } = useLivePrice(ticker);
 
   const [watchlist, setWatchlist] = useState([]);
@@ -298,6 +303,17 @@ export default function GexDashboard() {
                 ? null : <option value={ticker}>{ticker}</option>}
               {(watchlist.length ? watchlist : [ticker]).map((t) => (
                 <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+            <label className="v2-gex-header__pickerlabel" style={{ marginLeft: 12 }}>
+              DTE
+            </label>
+            <select className="v2-gex-header__picker"
+                    value={expiration}
+                    onChange={(e) => setExpiration(e.target.value)}
+                    title="Restrict the chain to expirations within N days. `all` keeps the legacy 45-day front-month window.">
+              {EXPIRATION_BUCKETS.map((b) => (
+                <option key={b} value={b}>{b}</option>
               ))}
             </select>
           </div>

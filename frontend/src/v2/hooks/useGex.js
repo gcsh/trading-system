@@ -22,7 +22,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 
-export default function useGex(ticker, { refreshMs = 30_000 } = {}) {
+export default function useGex(ticker, { refreshMs = 30_000, expiration = 'all' } = {}) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -37,7 +37,10 @@ export default function useGex(ticker, { refreshMs = 30_000 } = {}) {
 
     async function fetchOnce() {
       try {
-        const r = await fetch(`/heatseeker/${encodeURIComponent(ticker)}`);
+        const qs = expiration && expiration !== 'all'
+          ? `?expiration=${encodeURIComponent(expiration)}`
+          : '';
+        const r = await fetch(`/heatseeker/${encodeURIComponent(ticker)}${qs}`);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const j = await r.json();
         if (cancelled) return;
@@ -54,7 +57,7 @@ export default function useGex(ticker, { refreshMs = 30_000 } = {}) {
     fetchOnce();
     const id = setInterval(fetchOnce, refreshMs);
     return () => { cancelled = true; clearInterval(id); };
-  }, [ticker, refreshMs, tick]);
+  }, [ticker, refreshMs, tick, expiration]);
 
   return { data, error, loading, refresh };
 }

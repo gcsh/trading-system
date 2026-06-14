@@ -185,12 +185,14 @@ export default function GexByStrikeChart({
 
   return (
     <div className="v2-gex-strikechart" style={{ width: '100%' }}>
-      {/* `preserveAspectRatio="none"` stretches the SVG to fill the
-          container, which makes the bars look like spaghetti when the
-          panel is much wider than the 1000-unit viewBox (the Intel-tab
-          context). `xMidYMid meet` keeps the chart honest and centers it. */}
+      {/* This chart is fundamentally a horizontal-bar layout — bars
+          extend left/right from a center axis. Stretching the SVG
+          horizontally (`preserveAspectRatio="none"`) makes the bars
+          longer, which is correct: bar length encodes GEX magnitude.
+          The previous attempt to use `xMidYMid meet` shrunk the bars
+          into a narrow center band with huge empty side margins. */}
       <svg viewBox={`0 0 ${VW} ${VH}`}
-           preserveAspectRatio="xMidYMid meet"
+           preserveAspectRatio="none"
            width="100%" height={height}
            style={{ display: 'block' }}>
         {/* Backdrop grid lines (vertical, at each x-tick). */}

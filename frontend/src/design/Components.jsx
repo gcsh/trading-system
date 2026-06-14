@@ -119,6 +119,16 @@ export function Sparkline({
  *   colLabels: labels for each column (above the grid)
  *   minVal/maxVal: optional clamp. Otherwise computed from data.
  * ─────────────────────────────────────────────────────────────────── */
+function _heatmapFormat(v) {
+  if (typeof v !== 'number' || !isFinite(v)) return '';
+  const x = Math.abs(v);
+  const sign = v < 0 ? '-' : '';
+  if (x >= 1e9) return `${sign}${(x / 1e9).toFixed(1)}B`;
+  if (x >= 1e6) return `${sign}${(x / 1e6).toFixed(0)}M`;
+  if (x >= 1e3) return `${sign}${(x / 1e3).toFixed(0)}K`;
+  return `${sign}${x.toFixed(0)}`;
+}
+
 export function MiniHeatmap({
   data = [[]],
   rowLabels = [],
@@ -160,8 +170,8 @@ export function MiniHeatmap({
               <div key={ci}
                    className="v2-heatmap__cell"
                    style={{ background: cellColor(v) }}
-                   title={typeof v === 'number' ? v.toFixed(2) : ''}>
-                {typeof v === 'number' ? v.toFixed(0) : ''}
+                   title={typeof v === 'number' ? v.toLocaleString() : ''}>
+                {_heatmapFormat(v)}
               </div>
             ))}
           </div>
@@ -268,7 +278,11 @@ export function Table({ cols = [], rows = [], striped = false, sticky = false })
     striped ? 'v2-table--striped' : '',
     sticky ? 'v2-table--sticky' : '',
   ].filter(Boolean).join(' ');
+  // Wrap in a scrollable container so a long row never punches out of
+  // the parent Card. Truncation inside cells (white-space:nowrap +
+  // text-overflow:ellipsis) is handled by `.v2-table td` in tokens.css.
   return (
+    <div className="v2-table-wrap">
     <table className={cls}>
       <thead>
         <tr>
@@ -295,6 +309,7 @@ export function Table({ cols = [], rows = [], striped = false, sticky = false })
         ))}
       </tbody>
     </table>
+    </div>
   );
 }
 
