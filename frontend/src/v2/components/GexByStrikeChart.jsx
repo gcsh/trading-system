@@ -182,6 +182,35 @@ export default function GexByStrikeChart({
     markers.push({ y: PAD.top + innerH - ((maxGammaStrike - minStrike) / strikeSpan) * innerH,
       label: 'γ MAX', color: 'var(--accent-yellow)', strike: maxGammaStrike });
   }
+  // Anti-collision: marker chips are ~22px tall. When DTE is set to
+  // 0d only a few strikes have data and walls/flip end up within a
+  // dollar or two of each other, so their chip boxes stack on top
+  // and read as "γ FLCALL WALL". Sort by y, then cascade each chip
+  // down so they're always at least 22px apart on the badge column.
+  // We keep the indicator LINES at the true y; only the badge
+  // visual position is nudged. Same approach handles spot collisions.
+  const CHIP_H = 22;
+  markers.sort((a, b) => a.y - b.y);
+  for (let i = 1; i < markers.length; i++) {
+    const minY = markers[i - 1].badgeY != null ? markers[i - 1].badgeY : markers[i - 1].y;
+    if (markers[i].y - minY < CHIP_H) {
+      markers[i].badgeY = minY + CHIP_H;
+    } else {
+      markers[i].badgeY = markers[i].y;
+    }
+  }
+  if (markers.length) markers[0].badgeY = markers[0].y;
+  // SPOT badge also cascades if it overlaps any marker.
+  let spotBadgeY = null;
+  if (spotY != null) {
+    spotBadgeY = spotY;
+    for (const m of markers) {
+      const mBadge = m.badgeY != null ? m.badgeY : m.y;
+      if (Math.abs(spotBadgeY - mBadge) < CHIP_H) {
+        spotBadgeY = mBadge + CHIP_H;
+      }
+    }
+  }
 
   // Geometry → CSS-percent helpers. The SVG stretches horizontally
   // (`preserveAspectRatio="none"`) so any x-coord in viewBox units
@@ -312,23 +341,28 @@ export default function GexByStrikeChart({
           </div>
         )
       ))}
-      {/* PUT ← / → CALL hint labels at bottom corners. */}
+      {/* PUT ← / → CALL hint labels — moved to TOP of inner area so
+          they don't collide with the bottom x-axis tick numbers
+          (which previously read like 'LCBPUT' or 'CALL 8.8B' when
+          the chart was narrow). */}
       <div className="v2-gex-strikechart__hint v2-gex-strikechart__hint--left"
-           style={{ left: pctX(PAD.left + 4), top: PAD.top + innerH + 8 }}>
+           style={{ left: pctX(PAD.left + 4), top: PAD.top - 14 }}>
         PUT ←
       </div>
       <div className="v2-gex-strikechart__hint v2-gex-strikechart__hint--right"
-           style={{ left: pctX(PAD.left + innerW - 4), top: PAD.top + innerH + 8 }}>
+           style={{ left: pctX(PAD.left + innerW - 4), top: PAD.top - 14 }}>
         → CALL
       </div>
 
-      {/* Marker badges (CALL WALL, PUT WALL, γ FLIP, γ MAX). */}
+      {/* Marker badges (CALL WALL, PUT WALL, γ FLIP, γ MAX).
+          `badgeY` is the collision-aware y from the cascade pass
+          above; `m.y` is the true y where the indicator line sits. */}
       {markers.map((m, i) => (
         <div key={`mk-badge-${i}`}
              className="v2-gex-strikechart__marker"
              style={{
                left: pctX(VW - PAD.right + 4),
-               top: m.y - 9,
+               top: (m.badgeY ?? m.y) - 9,
                width: pctX(PAD.right - 8),
                color: m.color,
                borderColor: m.color,
@@ -337,12 +371,14 @@ export default function GexByStrikeChart({
         </div>
       ))}
 
-      {/* SPOT badge (yellow). */}
+      {/* SPOT badge (yellow). Uses cascaded spotBadgeY so it doesn't
+          stack onto a wall/flip chip when 0DTE collapses them all
+          within a couple of dollars. */}
       {spotY != null && (
         <div className="v2-gex-strikechart__spot"
              style={{
                left: pctX(PAD.left + innerW + 4),
-               top: spotY - 10,
+               top: (spotBadgeY ?? spotY) - 10,
                width: pctX(PAD.right - 8),
              }}>
           SPOT {fmtStrike(spotPrice)}

@@ -9,8 +9,11 @@
  *   - Optional vertical markers at call_wall / put_wall / gamma_flip
  *   - Annotations: BULLISH ZONE on right side, BEARISH ZONE on left
  *
- * Pure SVG; relies on the recharts dependency only via DOM-level area
- * primitives would over-complicate the dotted spot line + zone fills.
+ * Shapes are SVG with `preserveAspectRatio="none"` so bars/zones
+ * stretch to fill the container. Every text label is rendered as an
+ * absolutely-positioned HTML <div> on top of the SVG, otherwise the
+ * SVG stretch warps the glyphs into wide letter-spacing ("7 9 4"
+ * instead of "794"). Same approach as GexByStrikeChart.jsx.
  *
  * Props:
  *   strikes      [{ strike, net_gex }] — at minimum
@@ -100,6 +103,7 @@ export default function GexProfileChart({
   const xFor = (strike) => PAD.left + ((strike - minS) / spanS) * innerW;
   const yZero = PAD.top + innerH / 2;
   const yFor = (v) => yZero - (v / yMax) * (innerH / 2);
+  const pctX = (x) => `${(x / VW) * 100}%`;
 
   // Build two overlapping area paths — one clipped to positive half,
   // one to negative half.
@@ -131,12 +135,40 @@ export default function GexProfileChart({
   const xTicks = Array.from({ length: tickCount }, (_, i) =>
     minS + (i * spanS) / (tickCount - 1));
 
+  // Vertical markers (put_wall, gamma_flip, call_wall) — filtered to
+  // ones inside the window. Used for both SVG indicator lines and
+  // HTML labels.
+  const markers = [
+    { v: putWall,   color: 'var(--accent-red)',    label: 'PUT WALL' },
+    { v: gammaFlip, color: 'var(--accent-purple)', label: 'γ FLIP' },
+    { v: callWall,  color: 'var(--accent-green)',  label: 'CALL WALL' },
+  ].filter((m) => m.v && m.v >= minS && m.v <= maxS);
+
+  // Horizontal collision avoidance for marker labels at the top of
+  // the chart. Top labels at ~16px width each; if two are within
+  // ~7% of the inner width (~80px @ 1200vw → noticeable mash), stack
+  // the latter one higher.
+  const labelGap = 0.07 * innerW;
+  const markerLabels = markers
+    .map((m) => ({ ...m, x: xFor(m.v), row: 0 }))
+    .sort((a, b) => a.x - b.x);
+  for (let i = 1; i < markerLabels.length; i++) {
+    if (markerLabels[i].x - markerLabels[i - 1].x < labelGap) {
+      markerLabels[i].row = markerLabels[i - 1].row + 1;
+    }
+  }
+
   return (
-    <div className="v2-gex-profile" style={{ width: '100%' }}>
+    <div className="v2-gex-profile"
+         style={{ width: '100%', position: 'relative', height }}>
+      {/* Shapes only — bars, zones, polyline, marker lines, spot
+          line. ALL TEXT labels live in HTML overlays below the SVG
+          to avoid `preserveAspectRatio="none"` horizontal letter
+          stretching. */}
       <svg viewBox={`0 0 ${VW} ${VH}`}
            preserveAspectRatio="none"
            width="100%" height={height}
-           style={{ display: 'block' }}>
+           style={{ display: 'block', position: 'absolute', inset: 0 }}>
 
         {/* Zone background tints */}
         {spotPrice != null && spotPrice >= minS && spotPrice <= maxS && (
@@ -167,97 +199,150 @@ export default function GexProfileChart({
               stroke="rgba(241, 245, 249, 0.95)"
               strokeWidth={1.4} />
 
-        {/* X-axis ticks */}
+        {/* X-axis tick marks (lines only — labels handled by HTML). */}
         {xTicks.map((t, i) => (
-          <g key={`xt-${i}`}>
-            <line x1={xFor(t)} y1={PAD.top + innerH}
-                  x2={xFor(t)} y2={PAD.top + innerH + 4}
-                  stroke="var(--border-default)" />
-            <text x={xFor(t)} y={PAD.top + innerH + 16}
-                  fill="var(--text-tertiary)" fontSize="10"
-                  fontFamily="var(--font-mono)" textAnchor="middle">
-              {fmtStrike(t)}
-            </text>
-          </g>
+          <line key={`xt-${i}`}
+                x1={xFor(t)} y1={PAD.top + innerH}
+                x2={xFor(t)} y2={PAD.top + innerH + 4}
+                stroke="var(--border-default)" />
         ))}
 
-        {/* Y-axis labels */}
-        <text x={PAD.left - 8} y={PAD.top + 10}
-              fill="var(--accent-green)" fontSize="10"
-              fontFamily="var(--font-mono)" textAnchor="end" fontWeight="700">
-          +{fmtBig(yMax)}
-        </text>
-        <text x={PAD.left - 8} y={yZero + 4}
-              fill="var(--text-tertiary)" fontSize="10"
-              fontFamily="var(--font-mono)" textAnchor="end">
-          0
-        </text>
-        <text x={PAD.left - 8} y={PAD.top + innerH - 2}
-              fill="var(--accent-red)" fontSize="10"
-              fontFamily="var(--font-mono)" textAnchor="end" fontWeight="700">
-          -{fmtBig(yMax)}
-        </text>
-
-        {/* Zone annotations */}
-        <text x={PAD.left + 8} y={PAD.top + 16}
-              fill="var(--accent-red)" opacity={0.65}
-              fontSize="11" fontWeight="800"
-              letterSpacing="0.1em"
-              fontFamily="var(--font-display)">
-          BEARISH ZONE
-        </text>
-        <text x={PAD.left + innerW - 8} y={PAD.top + 16}
-              fill="var(--accent-green)" opacity={0.65}
-              fontSize="11" fontWeight="800"
-              letterSpacing="0.1em"
-              textAnchor="end"
-              fontFamily="var(--font-display)">
-          BULLISH ZONE
-        </text>
-
-        {/* Vertical markers */}
-        {[
-          { v: putWall,   color: 'var(--accent-red)',    label: 'PUT WALL' },
-          { v: gammaFlip, color: 'var(--accent-purple)', label: 'γ FLIP' },
-          { v: callWall,  color: 'var(--accent-green)',  label: 'CALL WALL' },
-        ].filter((m) => m.v && m.v >= minS && m.v <= maxS).map((m, i) => (
-          <g key={`m-${i}`}>
-            <line x1={xFor(m.v)} y1={PAD.top}
-                  x2={xFor(m.v)} y2={PAD.top + innerH}
-                  stroke={m.color}
-                  strokeWidth={1}
-                  strokeDasharray="3 3"
-                  opacity={0.6} />
-            <text x={xFor(m.v)} y={PAD.top - 8}
-                  fill={m.color} fontSize="9"
-                  fontFamily="var(--font-mono)" fontWeight="700"
-                  textAnchor="middle">
-              {m.label}
-            </text>
-          </g>
+        {/* Vertical marker indicator lines. Labels handled by HTML. */}
+        {markers.map((m, i) => (
+          <line key={`mk-line-${i}`}
+                x1={xFor(m.v)} y1={PAD.top}
+                x2={xFor(m.v)} y2={PAD.top + innerH}
+                stroke={m.color}
+                strokeWidth={1}
+                strokeDasharray="3 3"
+                opacity={0.6} />
         ))}
 
-        {/* Spot dotted line (last, on top). */}
+        {/* Spot dotted line — labeled badge handled by HTML. */}
         {spotPrice != null && spotPrice >= minS && spotPrice <= maxS && (
-          <g>
-            <line x1={xFor(spotPrice)} y1={PAD.top}
-                  x2={xFor(spotPrice)} y2={PAD.top + innerH}
-                  stroke="var(--accent-yellow)"
-                  strokeWidth={1.6}
-                  strokeDasharray="6 4" />
-            <rect x={xFor(spotPrice) - 30} y={PAD.top + innerH + 4}
-                  width={60} height={16}
-                  rx={2} ry={2}
-                  fill="var(--accent-yellow)" />
-            <text x={xFor(spotPrice)} y={PAD.top + innerH + 16}
-                  fill="var(--bg-primary)" fontSize="10"
-                  fontFamily="var(--font-mono)" fontWeight="800"
-                  textAnchor="middle">
-              SPOT {fmtStrike(spotPrice)}
-            </text>
-          </g>
+          <line x1={xFor(spotPrice)} y1={PAD.top}
+                x2={xFor(spotPrice)} y2={PAD.top + innerH}
+                stroke="var(--accent-yellow)"
+                strokeWidth={1.6}
+                strokeDasharray="6 4" />
         )}
       </svg>
+
+      {/* ─── HTML LABEL OVERLAYS (no font stretching) ─── */}
+
+      {/* Y-axis amplitude labels */}
+      <div className="v2-gex-profile__ylabel v2-gex-profile__ylabel--top"
+           style={{ left: 0, width: pctX(PAD.left - 6),
+                    top: PAD.top - 3 }}>
+        +{fmtBig(yMax)}
+      </div>
+      <div className="v2-gex-profile__ylabel v2-gex-profile__ylabel--zero"
+           style={{ left: 0, width: pctX(PAD.left - 6),
+                    top: yZero - 5 }}>
+        0
+      </div>
+      <div className="v2-gex-profile__ylabel v2-gex-profile__ylabel--bot"
+           style={{ left: 0, width: pctX(PAD.left - 6),
+                    top: PAD.top + innerH - 8 }}>
+        −{fmtBig(yMax)}
+      </div>
+
+      {/* Zone annotations */}
+      <div className="v2-gex-profile__zone v2-gex-profile__zone--bearish"
+           style={{ left: pctX(PAD.left + 8), top: PAD.top + 4 }}>
+        BEARISH ZONE
+      </div>
+      <div className="v2-gex-profile__zone v2-gex-profile__zone--bullish"
+           style={{ left: pctX(PAD.left + innerW - 8), top: PAD.top + 4 }}>
+        BULLISH ZONE
+      </div>
+
+      {/* X-axis tick labels */}
+      {xTicks.map((t, i) => (
+        <div key={`xt-lbl-${i}`}
+             className="v2-gex-profile__xlabel"
+             style={{ left: pctX(xFor(t)), top: PAD.top + innerH + 8 }}>
+          {fmtStrike(t)}
+        </div>
+      ))}
+
+      {/* Marker labels (PUT WALL, γ FLIP, CALL WALL) with vertical
+          stacking when labels collide horizontally. */}
+      {markerLabels.map((m, i) => (
+        <div key={`mk-lbl-${i}`}
+             className="v2-gex-profile__marker"
+             style={{
+               left: pctX(m.x),
+               top: PAD.top - 16 - (m.row * 12),
+               color: m.color,
+             }}>
+          {m.label}
+        </div>
+      ))}
+
+      {/* Spot badge — yellow, below the chart. */}
+      {spotPrice != null && spotPrice >= minS && spotPrice <= maxS && (
+        <div className="v2-gex-profile__spot"
+             style={{ left: pctX(xFor(spotPrice)),
+                      top: PAD.top + innerH + 6 }}>
+          SPOT {fmtStrike(spotPrice)}
+        </div>
+      )}
+
+      <style>{`
+        .v2-gex-profile { font-family: var(--font-mono); }
+        .v2-gex-profile > div {
+          position: absolute;
+          pointer-events: none;
+          white-space: nowrap;
+          font-family: var(--font-mono);
+          letter-spacing: 0;
+          line-height: 1;
+        }
+        .v2-gex-profile__ylabel {
+          font-size: 10px;
+          text-align: right;
+          padding-right: 4px;
+          font-weight: 700;
+        }
+        .v2-gex-profile__ylabel--top { color: var(--accent-green); }
+        .v2-gex-profile__ylabel--zero { color: var(--text-tertiary); font-weight: 400; }
+        .v2-gex-profile__ylabel--bot { color: var(--accent-red); }
+
+        .v2-gex-profile__zone {
+          font-family: var(--font-display);
+          font-size: 11px;
+          font-weight: 800;
+          letter-spacing: 0.1em;
+          opacity: 0.65;
+        }
+        .v2-gex-profile__zone--bearish { color: var(--accent-red); }
+        .v2-gex-profile__zone--bullish {
+          color: var(--accent-green);
+          transform: translateX(-100%);
+        }
+
+        .v2-gex-profile__xlabel {
+          font-size: 10px;
+          color: var(--text-tertiary);
+          transform: translateX(-50%);
+        }
+        .v2-gex-profile__marker {
+          font-size: 9px;
+          font-weight: 700;
+          transform: translateX(-50%);
+        }
+        .v2-gex-profile__spot {
+          font-size: 10px;
+          font-weight: 800;
+          color: var(--bg-primary);
+          background: var(--accent-yellow);
+          padding: 2px 6px;
+          border-radius: 3px;
+          transform: translateX(-50%);
+          line-height: 14px;
+        }
+      `}</style>
     </div>
   );
 }
