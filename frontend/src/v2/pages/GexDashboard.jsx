@@ -76,6 +76,23 @@ function nyDateString(d = new Date()) {
   }
 }
 
+/* Chain freshness pill — one place that maps backend tags to tone + label.
+   The backend stamps `chain_source` + `chain_max_age_seconds` +
+   `chain_freshness` on every /heatseeker response. */
+function freshnessToneAndLabel(freshness, ageSec, source) {
+  if (!source || source === 'none') return { tone: 'error', label: 'no chain' };
+  const ageStr = ageSec != null && isFinite(ageSec)
+    ? (ageSec < 60 ? `${Math.round(ageSec)}s`
+       : ageSec < 3600 ? `${Math.round(ageSec / 60)}m`
+       : `${(ageSec / 3600).toFixed(1)}h`)
+    : null;
+  if (freshness === 'fresh') return { tone: 'success', label: ageStr ? `live · ${ageStr}` : 'live' };
+  if (freshness === 'warm') return { tone: 'warning', label: ageStr ? `warm · ${ageStr}` : 'warm' };
+  if (freshness === 'stale') return { tone: 'error', label: ageStr ? `stale · ${ageStr}` : 'stale' };
+  // unknown — vendor doesn't carry per-quote timestamps (yfinance/cboe).
+  return { tone: 'warning', label: 'age unknown' };
+}
+
 /* ── derived calculators ───────────────────────────────────────────── */
 function pctOTM(strikes, spot, side /* 'call' | 'put' */) {
   if (!Array.isArray(strikes) || !spot) return null;
@@ -292,10 +309,22 @@ export default function GexDashboard() {
             <div className="v2-gex-header__px mono">
               {fmtMoney(livePrice)}
             </div>
-            <div className={`v2-gex-header__src mono ${tick?.source?.includes('alpaca') ? 'src-good' : tick?.source?.includes('stale') ? 'src-stale' : ''}`}>
-              {tick?.source || gex?.source || '—'}
+            <div className={`v2-gex-header__src mono ${tick?.source?.includes('alpaca') || tick?.source?.includes('thetadata') ? 'src-good' : tick?.source?.includes('stale') ? 'src-stale' : ''}`}>
+              spot via {tick?.source || gex?.source || '—'}
               {tick?.age_seconds != null && ` · ${tick.age_seconds.toFixed(0)}s`}
             </div>
+            {/* Chain freshness — separate signal from the spot quote.
+                ThetaData → live · 12s, yfinance → age unknown, etc. */}
+            {(() => {
+              const fresh = freshnessToneAndLabel(
+                gex?.chain_freshness, gex?.chain_max_age_seconds, gex?.chain_source);
+              return (
+                <div className="v2-gex-header__chain mono">
+                  chain via <strong>{gex?.chain_source || gex?.source || '—'}</strong>
+                  <Pill tone={fresh.tone}>{fresh.label}</Pill>
+                </div>
+              );
+            })()}
           </div>
         </div>
 
@@ -306,16 +335,7 @@ export default function GexDashboard() {
               {fmtBig(totalGex)}
             </div>
             <Pill tone={totalGex >= 0 ? 'success' : 'error'}>
-              {totalGexBias || '—'}
-            </Pill>
-          </div>
-          <div className="v2-gex-header__kpi">
-            <div className="v2-gex-header__kpi-label">NET GEX</div>
-            <div className={`v2-gex-header__kpi-val mono ${netGex >= 0 ? 'pos' : 'neg'}`}>
-              {fmtBig(netGex)}
-            </div>
-            <Pill tone={netGex >= 0 ? 'success' : 'error'}>
-              {netGex >= 0 ? 'Long γ' : 'Short γ'}
+              {totalGexBias || '—'} · {netGex >= 0 ? 'Long γ' : 'Short γ'}
             </Pill>
           </div>
           <div className="v2-gex-header__kpi">
@@ -331,9 +351,23 @@ export default function GexDashboard() {
           /heatseeker/{ticker} failed: {gexErr}. Showing whatever loaded earlier.
         </AlertBanner>
       )}
-      {gex?.stale && (
+      {gex?.chain_freshness === 'stale' && (
+        <AlertBanner severity="error">
+          Chain is STALE — vendor <strong>{gex?.chain_source}</strong> last quote
+          {gex?.chain_max_age_seconds != null
+            ? ` ${(gex.chain_max_age_seconds / 60).toFixed(0)} minutes ago.`
+            : '.'} Trading decisions on this snapshot are not safe.
+        </AlertBanner>
+      )}
+      {gex?.chain_freshness === 'unknown' && gex?.chain_source === 'yfinance' && (
+        <AlertBanner severity="warning">
+          Chain via <strong>yfinance</strong> — no per-quote timestamp.
+          ThetaData unreachable; mids may be hours stale.
+        </AlertBanner>
+      )}
+      {gex?.stale && gex?.chain_freshness !== 'stale' && (
         <AlertBanner severity="info">
-          Snapshot flagged STALE by backend ({gex.note || 'no freshness note'}).
+          Snapshot timestamp predates current session ({gex.note || 'no freshness note'}).
         </AlertBanner>
       )}
 
@@ -648,6 +682,19 @@ export default function GexDashboard() {
         }
         .v2-gex-header__src.src-good { color: var(--accent-green); }
         .v2-gex-header__src.src-stale { color: var(--accent-yellow); }
+        .v2-gex-header__chain {
+          margin-top: 6px;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 11px;
+          color: var(--text-tertiary);
+          white-space: nowrap;
+        }
+        .v2-gex-header__chain strong {
+          color: var(--text-primary);
+          font-weight: 700;
+        }
 
         .v2-gex-header__right {
           display: flex; gap: 18px;

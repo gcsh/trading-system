@@ -54,8 +54,9 @@ dist/
 build/
 
 # --- data / cache (do not commit ingested market data) ---
-data/
-data_lake/
+# Anchored to repo root so we do NOT clobber backend/bot/data/ (source code).
+/data/
+/data_lake/
 .cache/
 .local-cache/
 *.parquet

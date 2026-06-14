@@ -147,6 +147,15 @@ class GEXResult:
     zero_dte_net_gex: Optional[float] = None
     zero_dte_share: Optional[float] = None      # 0DTE / total |GEX|
 
+    # Chain freshness (Phase A 2026-06-13). The UI shows a vendor + age
+    # pill so the operator can tell at a glance whether ThetaData is
+    # primary or we degraded to yfinance with stale mids. Reset on each
+    # cycle; ``chain_max_age_seconds`` is the age of the *oldest* quote
+    # in the chain (worst-case freshness).
+    chain_source: str = "none"
+    chain_max_age_seconds: Optional[float] = None
+    chain_freshness: str = "unknown"            # fresh | warm | stale | unknown
+
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -171,6 +180,146 @@ def _spot(ticker: str) -> float:
 
 
 # ── raw chain sources (each returns [{type,strike,oi,gamma,expiry}] or None) ──
+
+def _thetadata_chain(ticker: str, spot: float,
+                          *, max_dte: int = 45) -> Optional[tuple]:
+    """Fetch a per-strike chain from the local ThetaData v3 terminal and
+    convert it into the ``{type, strike, oi, gamma, iv, expiry}`` shape
+    the pipeline expects.
+
+    Returns ``(rows, max_age_seconds)`` or ``None`` on any of:
+      • terminal unreachable
+      • no listed expirations within ``max_dte``
+      • no usable quotes / OI on any chosen expiration
+
+    Why this exists: the old chain providers (Cboe + yfinance) silently
+    served quotes hours stale. ThetaData carries an explicit per-row
+    timestamp; we surface ``max_age_seconds`` so the caller can render
+    a vendor + age pill (or hard-reject during RTH).
+
+    Gamma is computed locally from a bisected IV (no vendor-derived
+    greeks since Standard tier doesn't expose them) — same Black-Scholes
+    primitive used everywhere else in the codebase.
+    """
+    try:
+        from backend.bot.data.thetadata import get_client
+        from backend.bot.greeks import implied_vol
+    except Exception:
+        return None
+    if not spot or spot <= 0:
+        return None
+
+    today = date.today()
+    cutoff = today + timedelta(days=max(0, int(max_dte)))
+    try:
+        client = get_client()
+        listed = client.list_expirations(ticker)
+    except Exception:
+        return None
+    chosen = [e for e in listed if today <= e <= cutoff]
+    if not chosen:
+        return None
+
+    rfr = float(getattr(TUNABLES, "risk_free_rate", 0.045))
+    rows: List[dict] = []
+    now = _now_et_naive()
+    max_age = 0.0
+    saw_quote = False
+    saw_oi = False
+    for expiry in chosen:
+        try:
+            quotes = client.chain_snapshot(ticker, expiry)
+            ois = client.chain_open_interest(ticker, expiry)
+        except Exception:
+            continue
+        if not quotes:
+            continue
+        saw_quote = True
+        if ois:
+            saw_oi = True
+        oi_index = {(round(o.strike, 4), o.right): o.open_interest for o in ois}
+        dte = max(1, (expiry - today).days)
+        t_years = dte / 365.0
+        expiry_iso = expiry.isoformat()
+        for q in quotes:
+            if q.bid <= 0 and q.ask <= 0:
+                continue
+            mid = q.mid
+            if mid <= 0:
+                continue
+            try:
+                iv = implied_vol(mid, spot, q.strike, t_years,
+                                       r=rfr,
+                                       kind="call" if q.right == "CALL" else "put")
+            except Exception:
+                iv = None
+            if iv is None or iv <= 0 or iv > 5.0:
+                continue
+            try:
+                gamma = _bs_gamma(spot, q.strike, t_years, iv, rfr)
+            except Exception:
+                gamma = 0.0
+            if gamma <= 0:
+                continue
+            oi_val = float(oi_index.get((round(q.strike, 4), q.right), 0) or 0)
+            rows.append({
+                "type": "C" if q.right == "CALL" else "P",
+                "strike": float(q.strike),
+                "oi": oi_val,
+                "gamma": float(gamma),
+                "iv": float(iv),
+                "expiry": expiry_iso,
+            })
+            if q.timestamp is not None:
+                age = max(0.0, (now - q.timestamp).total_seconds())
+                if age > max_age:
+                    max_age = age
+    if not rows or not saw_quote:
+        return None
+    if not saw_oi:
+        logger.debug("thetadata chain returned no OI for %s — gamma×OI=0",
+                          ticker)
+    return rows, max_age
+
+
+def _classify_freshness(max_age_seconds: float, source: str) -> str:
+    """Bucket chain freshness for the UI pill.
+
+    Only meaningful for sources that carry per-quote timestamps (today:
+    ThetaData). Other sources ship "unknown" because we have no honest
+    age signal.
+
+    Thresholds:
+        ≤ 60s            → "fresh"  (green)
+        61s … 300s       → "warm"   (yellow — warning, not fail)
+        > 300s in RTH    → "stale"  (red)
+        > 21600s anytime → "stale"  (multi-hour old quote — always bad)
+    """
+    if source not in ("thetadata",):
+        return "unknown"
+    age = float(max_age_seconds or 0.0)
+    if age <= 60:
+        return "fresh"
+    if age <= 300:
+        return "warm"
+    try:
+        from backend.bot.calendar import is_us_market_open
+        in_rth = is_us_market_open()
+    except Exception:
+        in_rth = False
+    if in_rth or age > 6 * 3600:
+        return "stale"
+    return "warm"
+
+
+def _now_et_naive() -> datetime:
+    """Naive ET datetime — matches ThetaData's ET-local timestamp format."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
+    except Exception:
+        return datetime.utcnow() - timedelta(hours=4)
+
 
 def _cboe_chain(ticker: str) -> Optional[List[dict]]:
     from curl_cffi import requests as creq
@@ -525,13 +674,30 @@ def gex(ticker: str, *, max_dte: Optional[int] = None) -> GEXResult:
         _CACHE[cache_key] = (now, fa)
         return fa
 
+    clean_dte = int(max_dte) if max_dte is not None else 45
     chain, source = None, "none"
+    chain_max_age: Optional[float] = None
+    # ThetaData first — paid OPRA NBBO with explicit per-quote timestamp.
+    # Falls through silently when the terminal is unreachable or the
+    # subscription tier rejects the call.
     try:
-        c = _cboe_chain(ticker)
-        if c:
-            chain, source = c, "cboe"
+        td = _thetadata_chain(ticker, spot, max_dte=clean_dte)
+        if td is not None:
+            rows_td, max_age = td
+            if rows_td:
+                chain, source = rows_td, "thetadata"
+                chain_max_age = float(max_age)
     except Exception:
         pass
+    # Cboe delayed JSON — real OI + delayed vendor IV, no NBBO timestamp.
+    if chain is None:
+        try:
+            c = _cboe_chain(ticker)
+            if c:
+                chain, source = c, "cboe"
+        except Exception:
+            pass
+    # yfinance — last-resort, known to ship multi-hour-stale quotes.
     if chain is None:
         try:
             y = _yf_chain(ticker, spot)
@@ -540,7 +706,6 @@ def gex(ticker: str, *, max_dte: Optional[int] = None) -> GEXResult:
         except Exception:
             pass
 
-    clean_dte = int(max_dte) if max_dte is not None else 45
     def _clean_dte(rows: List[dict]) -> List[dict]:
         return _clean(rows, max_dte=clean_dte)
     res = run_pipeline(
@@ -580,6 +745,16 @@ def gex(ticker: str, *, max_dte: Optional[int] = None) -> GEXResult:
     else:
         note = f"{res.stage}: {'; '.join(res.issues) or 'unavailable'}"
         out = GEXResult(ticker, ts, round(spot, 2), source=source, ok=False, note=note)
+    # Phase A freshness stamp — only ThetaData carries a real per-quote
+    # timestamp; yfinance / Cboe quotes are tagged "unknown" so the UI
+    # renders an amber pill (we don't know how stale the mids are).
+    out.chain_source = source
+    if chain_max_age is not None:
+        out.chain_max_age_seconds = round(float(chain_max_age), 1)
+        out.chain_freshness = _classify_freshness(chain_max_age, source)
+    else:
+        out.chain_max_age_seconds = None
+        out.chain_freshness = "unknown" if source != "none" else "stale"
     _apply_deltas(out, prev)
     out.stale = _is_stale(out.timestamp)
     _CACHE[cache_key] = (now, out)
