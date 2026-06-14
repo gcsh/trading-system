@@ -1342,8 +1342,12 @@ export default function StockAnalysis() {
                           chartRefs={chartRefs}
                           activeTool={drawingTool}
                           shapes={drawings}
+                          selectedId={selectedDrawingId}
+                          setSelectedId={setSelectedDrawingId}
                           addShape={addDrawing}
                           removeShape={removeDrawing}
+                          updateShape={updateDrawing}
+                          duplicateShape={duplicateDrawing}
                           undo={undoDrawing}
                           redo={redoDrawing}
                         />
