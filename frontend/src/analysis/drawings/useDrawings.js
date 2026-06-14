@@ -27,7 +27,20 @@ function loadFromStorage(ticker) {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((s) => s && s.tool && Array.isArray(s.points));
+    // Also drop shapes whose points carry NaN/non-finite coordinates —
+    // an earlier D.4 build briefly stored time=NaN on daily charts,
+    // and those shapes would silently never render again. Sweep them
+    // on next load so the canvas doesn't accumulate ghost entries.
+    return parsed.filter((s) => {
+      if (!s || !s.tool || !Array.isArray(s.points)) return false;
+      for (const p of s.points) {
+        if (!p) return false;
+        if (!Number.isFinite(p.time) || !Number.isFinite(p.price)) {
+          return false;
+        }
+      }
+      return true;
+    });
   } catch (_) {
     return [];
   }

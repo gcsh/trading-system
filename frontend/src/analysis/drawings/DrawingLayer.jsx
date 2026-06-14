@@ -34,6 +34,32 @@ const WIRED_TOOLS = new Set([
 const DRAG_THRESHOLD_PX = 4;
 const HANDLE_RADIUS = 5;
 
+// lightweight-charts `coordinateToTime` returns `Time = number |
+// BusinessDay | string`. For daily/weekly bars it's a string
+// ('2026-06-12'); for intraday it's a unix-seconds number. We need a
+// numeric form because:
+//   • Body-drag computes dt = currentTime − startTime, which is NaN
+//     on strings.
+//   • Storing the raw string is fine for repaint (timeToCoordinate
+//     accepts all three), but breaks drag math.
+// So normalize to unix seconds on the way IN. The chart still accepts
+// unix seconds as a valid Time when we feed shapes back through
+// timeToCoordinate during repaint.
+function timeToUnix(t) {
+  if (t == null) return 0;
+  if (typeof t === 'number') return t;
+  if (typeof t === 'string') {
+    const ms = Date.parse(t);
+    return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
+  }
+  if (typeof t === 'object' && 'year' in t) {
+    // BusinessDay: { year, month, day } (1-indexed month, per spec).
+    return Math.floor(
+      Date.UTC(t.year, (t.month || 1) - 1, t.day || 1) / 1000);
+  }
+  return 0;
+}
+
 const COLOR_SWATCHES = [
   '#5fc9ce', '#26d07c', '#ffd166', '#e89a4c', '#e8606e',
   '#a073d4', '#5b9bd5', '#e6edf3',
@@ -215,10 +241,15 @@ export default function DrawingLayer({
     const r = cv.getBoundingClientRect();
     const x = evtClientX - r.left;
     const y = evtClientY - r.top;
-    const time = chartRefs.chart.timeScale().coordinateToTime(x);
+    const rawTime = chartRefs.chart.timeScale().coordinateToTime(x);
     const price = chartRefs.candleSeries.coordinateToPrice(y);
-    if (time == null || price == null) return null;
-    return { x, y, time: Number(time), price };
+    if (rawTime == null || price == null) return null;
+    // Normalize to unix seconds via timeToUnix — Number(time) was NaN
+    // for daily bars (which return string Times like '2026-06-12'),
+    // which silently broke shape persistence + drag arithmetic.
+    const time = timeToUnix(rawTime);
+    if (!Number.isFinite(time) || time <= 0) return null;
+    return { x, y, time, price };
   }, [chartRefs]);
 
   const clientToCanvas = useCallback((cx, cy) => {
