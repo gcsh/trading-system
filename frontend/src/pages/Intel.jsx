@@ -9,7 +9,10 @@ import React, { Suspense, lazy } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 const Markets = lazy(() => import('./Market.jsx'));
-const GEX = lazy(() => import('./Heatseeker.jsx'));
+// Phase B (2026-06-14) — GEX tab now uses the V2 dashboard (dark-neon
+// design, freshness pill, 398-strike chart). The legacy Heatseeker.jsx
+// is archived but kept on disk for now; remove on the next round.
+const GEX = lazy(() => import('../v2/pages/GexDashboard.jsx'));
 const Flow = lazy(() => import('./Flowseeker.jsx'));
 const Earnings = lazy(() => import('./EarningsIntel.jsx'));
 const Sources = lazy(() => import('./SourceAttribution.jsx'));
