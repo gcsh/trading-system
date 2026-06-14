@@ -25,7 +25,9 @@ import TheoryChart from '../components/TheoryChart.jsx';
 // F4 — chart improvements: shared timeframe, shared bars hook, fullscreen wrapper.
 import ChartFullscreenWrapper from '../components/ChartFullscreenWrapper.jsx';
 import TimeframeSelector from '../components/TimeframeSelector.jsx';
+import IntervalSelector from '../components/IntervalSelector.jsx';
 import useChartTimeframe from '../hooks/useChartTimeframe.js';
+import useChartInterval from '../hooks/useChartInterval.js';
 import useAnalysisBars from '../hooks/swr/useAnalysisBars.js';
 
 const WINDOWS = [
@@ -785,6 +787,10 @@ export default function StockAnalysis() {
   const { timeframe, setTimeframe, backendWindow, trimDays } =
     useChartTimeframe(ticker, '1D');
 
+  // Candle interval (1m..W) with Auto = backend default for current window.
+  const { interval, setInterval, backendInterval, aggregate } =
+    useChartInterval(ticker, 'auto');
+
   // F4 — fullscreen overlay toggle state.
   const [hiddenOverlays, setHiddenOverlays] = useState({});
   const toggleOverlay = (id) => setHiddenOverlays((m) => ({ ...m, [id]: !m[id] }));
@@ -859,6 +865,7 @@ export default function StockAnalysis() {
   // SAME SWR cache entry and SAME trimmed bars for the same ticker.
   const { bars: canonicalBars } = useAnalysisBars(
     ticker, backendWindow, trimDays,
+    { interval: backendInterval, aggregate },
   );
   const barsForChart = canonicalBars && canonicalBars.length
     ? canonicalBars
@@ -883,11 +890,12 @@ export default function StockAnalysis() {
             Per-stock chart with detector hits + corpus-grounded theses.
           </div>
         </div>
-        <div className="row" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div className="row" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           {/* F4 — 10-button timeframe row. Replaces the legacy 3-window
               row above. The selector maps each UI timeframe to the
               correct backend window + client trim via useChartTimeframe. */}
           <TimeframeSelector value={timeframe} onChange={setTimeframe} />
+          <IntervalSelector value={interval} onChange={setInterval} />
         </div>
       </div>
 
@@ -1064,6 +1072,18 @@ export default function StockAnalysis() {
                 ]} />
               );
 
+              // Surface timeframe + interval controls IN the wrapper so
+              // they're reachable in fullscreen too — operators were
+              // blind to them once the chart took over the viewport.
+              const chartToolbarLeft = (
+                <div style={{
+                  display: 'flex', gap: 10, flexWrap: 'wrap',
+                  alignItems: 'center',
+                }}>
+                  <TimeframeSelector value={timeframe} onChange={setTimeframe} compact />
+                  <IntervalSelector value={interval} onChange={setInterval} compact />
+                </div>
+              );
               return (
                 <ChartFullscreenWrapper
                   ticker={ticker}
@@ -1073,6 +1093,7 @@ export default function StockAnalysis() {
                   onToggleGroupOverlay={onToggleGroupOverlay}
                   onSoloGroupOverlay={onSoloGroupOverlay}
                   thesisCards={thesisCards}
+                  toolbarLeft={chartToolbarLeft}
                   height={460}
                 >
                   <div style={{

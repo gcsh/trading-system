@@ -45,6 +45,19 @@ _WINDOW_PRESETS: Dict[str, Tuple[str, int]] = {
     # selector when the operator wants a strict intraday view.
     "today": ("5m", 3),
     "5d":    ("15m", 5),
+    # Long-range presets — daily bars. The frontend timeframe selector
+    # picks the right slug per UI button so a 3Y view returns 3 years
+    # of bars instead of the legacy 30-day `all` ceiling that made 3Y/
+    # 5Y/MAX look like 6 months.
+    "1m":    ("1d", 31),
+    "3m":    ("1d", 95),
+    "6m":    ("1d", 185),
+    "1y":    ("1d", 370),
+    "3y":    ("1d", 3 * 366),
+    "5y":    ("1d", 5 * 366),
+    "max":   ("1d", 15 * 366),
+    # `all` — legacy short hourly preset retained for back-compat with
+    # callers that send window=all expecting intraday hourly bars.
     "all":   ("1h", 30),
 }
 

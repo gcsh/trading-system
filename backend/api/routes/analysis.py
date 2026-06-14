@@ -130,11 +130,32 @@ def _resolve_window(window: str) -> Tuple[str, datetime]:
     need to return the interval + a since-cutoff for filtering
     observations.
 
-    ``today`` — 5m, since the start of today UTC.
-    ``5d``   — 15m, since 5 days ago.
-    ``all``  — 1h, since 30 days ago.
+    Short-range:
+      ``today`` — 5m, since the start of today UTC.
+      ``5d``   — 15m, since 5 days ago.
+      ``all``  — 1h, since 30 days ago.
+
+    Long-range (added 2026-06-14 to fix 3Y/5Y/MAX returning ~6 months):
+      ``1m``   — 1d, since 31 days ago.
+      ``3m``   — 1d, since 95 days ago.
+      ``6m``   — 1d, since 185 days ago.
+      ``1y``   — 1d, since 370 days ago.
+      ``3y``   — 1d, since 3·366 days ago.
+      ``5y``   — 1d, since 5·366 days ago.
+      ``max``  — 1d, since 15·366 days ago.
     """
     w = (window or "today").lower()
+    long_range = {
+        "1m":  31,
+        "3m":  95,
+        "6m":  185,
+        "1y":  370,
+        "3y":  3 * 366,
+        "5y":  5 * 366,
+        "max": 15 * 366,
+    }
+    if w in long_range:
+        return "1d", datetime.utcnow() - timedelta(days=long_range[w])
     if w == "5d":
         return "15m", datetime.utcnow() - timedelta(days=5)
     if w == "all":
@@ -846,15 +867,36 @@ def _build_strategy_matrix_for_analysis(
 async def analyze_ticker(
     ticker: str,
     background_tasks: BackgroundTasks,
-    window: str = Query("today", pattern="^(today|5d|all)$"),
+    window: str = Query(
+        "today",
+        pattern="^(today|5d|1m|3m|6m|1y|3y|5y|max|all)$",
+        description=(
+            "Time range slug. Short: today/5d/all (legacy intraday). "
+            "Long-range (daily bars): 1m/3m/6m/1y/3y/5y/max."
+        ),
+    ),
+    interval: Optional[str] = Query(
+        None,
+        pattern="^(1m|5m|15m|30m|1h|1d|1w)?$",
+        description=(
+            "Optional candle granularity override. When unset, the "
+            "window's default interval is used (today=5m, 5d=15m, "
+            "long-range=1d, all=1h)."
+        ),
+    ),
 ) -> Dict[str, Any]:
     ticker = (ticker or "").upper().strip()
     if not ticker:
         raise HTTPException(status_code=400, detail="ticker required")
 
-    interval, since_dt = _resolve_window(window)
-    bars = _fetch_bars(ticker, window, interval)
-    df = _fetch_bars_dataframe(ticker, window, interval)
+    resolved_interval, since_dt = _resolve_window(window)
+    # Honour an explicit interval override so a long-range window can
+    # be requested at a finer granularity (e.g. window=1y interval=1h
+    # for a year-long hourly chart).
+    if interval:
+        resolved_interval = interval
+    bars = _fetch_bars(ticker, window, resolved_interval)
+    df = _fetch_bars_dataframe(ticker, window, resolved_interval)
     bar_source = _last_bar_source.get(
         (ticker.upper(), window), "none" if not bars else "unknown",
     )

@@ -26,6 +26,47 @@
 import { useMemo } from 'react';
 import useSWR from 'swr';
 
+// Roll N consecutive bars into one bigger bar. Used to synthesize 4h
+// candles from a 1h backend fetch (and any future bucket-of-N intervals)
+// without a backend round-trip. Aggregation pulls open from the FIRST
+// bar in the bucket, close from the LAST, high/low across all of them,
+// and volume as the sum. Buckets are aligned on bar index, not on
+// wall-clock — so 4h bars don't pretend to be RTH-aligned; they're
+// "every 4 hourly candles, in order." Good enough for visual structure.
+function aggregateBars(bars, bucketSize) {
+  if (!Array.isArray(bars) || !bars.length) return bars || [];
+  const n = Number(bucketSize);
+  if (!Number.isFinite(n) || n <= 1) return bars;
+  const out = [];
+  for (let i = 0; i < bars.length; i += n) {
+    const slice = bars.slice(i, i + n);
+    if (!slice.length) continue;
+    const first = slice[0];
+    const last = slice[slice.length - 1];
+    let hi = Number(first.high);
+    let lo = Number(first.low);
+    let vol = 0;
+    for (const b of slice) {
+      const h = Number(b.high);
+      const l = Number(b.low);
+      if (Number.isFinite(h) && (!Number.isFinite(hi) || h > hi)) hi = h;
+      if (Number.isFinite(l) && (!Number.isFinite(lo) || l < lo)) lo = l;
+      const v = Number(b.volume);
+      if (Number.isFinite(v)) vol += v;
+    }
+    out.push({
+      t: first.t || first.timestamp,
+      timestamp: first.timestamp || first.t,
+      open: Number(first.open),
+      high: hi,
+      low: lo,
+      close: Number(last.close),
+      volume: vol,
+    });
+  }
+  return out;
+}
+
 function trimBars(bars, trimDays) {
   if (!Array.isArray(bars) || !bars.length || trimDays == null) return bars || [];
 
@@ -61,19 +102,25 @@ function trimBars(bars, trimDays) {
 export default function useAnalysisBars(
   ticker, backendWindow = 'today', trimDays = null, opts = {},
 ) {
-  const { refreshInterval = 0, enabled = true } = opts;
+  const {
+    refreshInterval = 0,
+    enabled = true,
+    interval = null,
+    aggregate = null,
+  } = opts;
+  const ivQs = interval ? `&interval=${encodeURIComponent(interval)}` : '';
   const key = enabled && ticker
-    ? `/analysis/${encodeURIComponent(ticker.toUpperCase())}?window=${encodeURIComponent(backendWindow)}`
+    ? `/analysis/${encodeURIComponent(ticker.toUpperCase())}?window=${encodeURIComponent(backendWindow)}${ivQs}`
     : null;
   const { data, error, isLoading, mutate } = useSWR(key, {
     refreshInterval,
     revalidateOnFocus: false,
   });
 
-  const trimmedBars = useMemo(
-    () => trimBars(data?.bars || [], trimDays),
-    [data, trimDays],
-  );
+  const trimmedBars = useMemo(() => {
+    const trimmed = trimBars(data?.bars || [], trimDays);
+    return aggregate ? aggregateBars(trimmed, aggregate) : trimmed;
+  }, [data, trimDays, aggregate]);
 
   return {
     payload: data,

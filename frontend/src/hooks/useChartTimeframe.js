@@ -26,20 +26,23 @@ import { useCallback, useEffect, useState } from 'react';
 export const TIMEFRAMES = ['1D', '1W', '1M', '3M', '6M', 'YTD', '1Y', '3Y', '5Y', 'MAX'];
 
 // timeframe → { backendWindow, trimDays | null }
-// Backend /analysis route only supports today / 5d / all.
-// We map every UI value to the smallest backend window that still
-// covers it, and (optionally) trim newer-than-X bars client-side.
+// Updated 2026-06-14: long-range timeframes now request the matching
+// backend window (1y, 3y, 5y, max). Previously every long range
+// fell back to `all` which only fetched 30 days, so 3Y/5Y/MAX
+// always rendered ~6 months. Now the backend serves the right depth
+// and client-side trim is only used to slice WITHIN a downloaded
+// window (e.g. 1M slices the first 30 days from a `1m` fetch).
 export const TIMEFRAME_MAP = {
-  '1D':  { backendWindow: 'today', trimDays: null   },
-  '1W':  { backendWindow: '5d',    trimDays: null   },
-  '1M':  { backendWindow: 'all',   trimDays: 30     },
-  '3M':  { backendWindow: 'all',   trimDays: 90     },
-  '6M':  { backendWindow: 'all',   trimDays: 180    },
-  'YTD': { backendWindow: 'all',   trimDays: 'ytd'  },
-  '1Y':  { backendWindow: 'all',   trimDays: 365    },
-  '3Y':  { backendWindow: 'all',   trimDays: 1095   },
-  '5Y':  { backendWindow: 'all',   trimDays: 1825   },
-  'MAX': { backendWindow: 'all',   trimDays: null   },
+  '1D':  { backendWindow: 'today', trimDays: null  },
+  '1W':  { backendWindow: '5d',    trimDays: null  },
+  '1M':  { backendWindow: '1m',    trimDays: null  },
+  '3M':  { backendWindow: '3m',    trimDays: null  },
+  '6M':  { backendWindow: '6m',    trimDays: null  },
+  'YTD': { backendWindow: '1y',    trimDays: 'ytd' },
+  '1Y':  { backendWindow: '1y',    trimDays: null  },
+  '3Y':  { backendWindow: '3y',    trimDays: null  },
+  '5Y':  { backendWindow: '5y',    trimDays: null  },
+  'MAX': { backendWindow: 'max',   trimDays: null  },
 };
 
 function storageKey(ticker) {
