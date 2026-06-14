@@ -81,10 +81,256 @@ function mapObservationsToAnnotations(observations, familyColors) {
       ts,
       shape: 'arrow_up',
       color: familyColors[fam] || '#9aa5b2',
-      label: obs.pattern || '',
+      // Phase C.1: chart-floating text labels removed. Marker arrow
+      // still draws at the bar (so timing is visible), but the
+      // pattern name now lives in the docked Detector Observatory
+      // on the right rail instead of crowding the candles.
+      label: '',
     });
   }
   return out;
+}
+
+/* Phase C.1 — Detector Observatory.
+   Docked legend that replaces the floating chart text. Groups
+   observations by family with a color dot, a count, the most-recent
+   pattern, and its timestamp. Renders inside the fullscreen right
+   rail and below the chart in normal mode. */
+function DetectorObservatory({ observations, familyLabels, familyColors }) {
+  const obs = observations || [];
+  if (!obs.length) {
+    return (
+      <div className="panel" style={{
+        padding: 10, fontSize: 12, color: 'var(--muted)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 6,
+      }}>
+        ∅ No detector observations in window.
+      </div>
+    );
+  }
+  const byFam = {};
+  for (const o of obs) {
+    const fam = o.family || 'uncategorized';
+    if (!byFam[fam]) byFam[fam] = [];
+    byFam[fam].push(o);
+  }
+  const fams = Object.keys(byFam).sort();
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', gap: 6,
+      fontSize: 12,
+    }}>
+      <div style={{
+        fontSize: 10, letterSpacing: '0.08em',
+        textTransform: 'uppercase', color: 'var(--muted)',
+        fontWeight: 700,
+      }}>
+        Detector hits · {obs.length}
+      </div>
+      {fams.map((fam) => {
+        const rows = byFam[fam];
+        // Newest first.
+        rows.sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
+        const top = rows[0];
+        return (
+          <div key={fam} style={{
+            display: 'flex', justifyContent: 'space-between',
+            alignItems: 'center', gap: 8,
+            padding: '6px 8px',
+            background: 'rgba(255, 255, 255, 0.02)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 4,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+              <span style={{
+                display: 'inline-block', width: 8, height: 8,
+                borderRadius: '50%',
+                background: familyColors[fam] || '#9aa5b2',
+                flexShrink: 0,
+              }} />
+              <span style={{
+                fontWeight: 600, color: 'var(--text-primary)',
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>
+                {familyLabels[fam] || fam}
+              </span>
+              <span style={{ color: 'var(--muted)', fontSize: 11 }}>
+                ({rows.length})
+              </span>
+            </div>
+            <div style={{
+              fontFamily: 'var(--font-mono)', fontSize: 10,
+              color: 'var(--muted)', textAlign: 'right',
+              whiteSpace: 'nowrap', overflow: 'hidden',
+              textOverflow: 'ellipsis', maxWidth: 140,
+            }}
+                 title={`${top.pattern} · ${top.timestamp}`}>
+              {top.pattern}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* Phase C.1 — Thesis Context accordion.
+   Replaces the prior flat list (just InsiderActivityPanel +
+   SmartMoneyPanel). Sections are collapsible so the operator can
+   focus on the one that matters; the first section starts open by
+   default. */
+function ThesisAccordion({ sections }) {
+  const [openIdx, setOpenIdx] = useState(0);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {sections.map((s, i) => {
+        const open = i === openIdx;
+        return (
+          <div key={s.id}
+               style={{
+                 border: '1px solid var(--border-subtle)',
+                 borderRadius: 6,
+                 background: open ? 'var(--bg-secondary)' : 'transparent',
+                 overflow: 'hidden',
+               }}>
+            <button type="button"
+                    onClick={() => setOpenIdx(open ? -1 : i)}
+                    style={{
+                      width: '100%', display: 'flex',
+                      justifyContent: 'space-between', alignItems: 'center',
+                      padding: '8px 10px',
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--text-primary)',
+                      cursor: 'pointer',
+                      fontSize: 11, fontWeight: 700,
+                      letterSpacing: '0.06em',
+                      textTransform: 'uppercase',
+                    }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span aria-hidden="true">{s.icon}</span>
+                {s.title}
+                {s.badge != null && (
+                  <span style={{
+                    background: 'var(--border-subtle)',
+                    color: 'var(--muted)',
+                    fontSize: 10, fontWeight: 600,
+                    padding: '1px 6px', borderRadius: 999,
+                  }}>{s.badge}</span>
+                )}
+              </span>
+              <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+                {open ? '−' : '+'}
+              </span>
+            </button>
+            {open && (
+              <div style={{ padding: '4px 10px 10px' }}>
+                {s.content}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* Phase C.2 scaffold — Theory selector dropdown.
+   Lets the operator pick one or more theories from the Theory Studio
+   catalog to overlay on the analysis chart. This commit ships the
+   UI + persisted state (per-ticker localStorage). The actual overlay
+   rendering reuses TheoryChart.annotations and lights up in the next
+   phase (C.2 full). Starter set: 6 of the 18 theories — Bollinger,
+   MACD, RSI div, AVWAP, Pivots, Fib retracement. */
+const THEORY_CATALOG = [
+  { id: 'bollinger', label: 'Bollinger Bands', color: '#5b9bd5' },
+  { id: 'macd',      label: 'MACD',            color: '#a073d4' },
+  { id: 'rsi_div',   label: 'RSI Divergence',  color: '#e89a4c' },
+  { id: 'avwap',     label: 'AVWAP',           color: '#5fc9ce' },
+  { id: 'pivots',    label: 'Pivot Levels',    color: '#e6c95f' },
+  { id: 'fib',       label: 'Fibonacci',       color: '#e8606e' },
+];
+
+function TheorySelector({ ticker, selected, onChange }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: 'relative' }}>
+      <button type="button"
+              onClick={() => setOpen((o) => !o)}
+              style={{
+                width: '100%', padding: '8px 10px',
+                background: 'var(--bg-secondary)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 6,
+                color: 'var(--text-primary)',
+                fontSize: 12, cursor: 'pointer',
+                display: 'flex', justifyContent: 'space-between',
+                alignItems: 'center',
+              }}>
+        <span>
+          <span style={{
+            fontSize: 10, letterSpacing: '0.06em',
+            textTransform: 'uppercase', color: 'var(--muted)',
+            marginRight: 6, fontWeight: 700,
+          }}>
+            Theories
+          </span>
+          {selected.length === 0
+            ? <span style={{ color: 'var(--muted)' }}>none selected</span>
+            : <span style={{ color: 'var(--text-primary)' }}>
+                {selected.length} active
+              </span>}
+        </span>
+        <span style={{ fontSize: 10, color: 'var(--muted)' }}>{open ? '▴' : '▾'}</span>
+      </button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, right: 0,
+          marginTop: 4, padding: 6,
+          background: 'var(--bg-secondary)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 6, zIndex: 10,
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+        }}>
+          {THEORY_CATALOG.map((t) => {
+            const on = selected.includes(t.id);
+            return (
+              <label key={t.id}
+                     style={{
+                       display: 'flex', alignItems: 'center', gap: 8,
+                       padding: '5px 6px', cursor: 'pointer',
+                       borderRadius: 4,
+                       background: on ? 'rgba(95, 201, 206, 0.06)' : 'transparent',
+                       fontSize: 12, color: 'var(--text-primary)',
+                     }}>
+                <input type="checkbox" checked={on}
+                       onChange={(e) => {
+                         const next = e.target.checked
+                           ? [...selected, t.id]
+                           : selected.filter((id) => id !== t.id);
+                         onChange(next);
+                       }} />
+                <span style={{
+                  display: 'inline-block', width: 8, height: 8,
+                  borderRadius: '50%', background: t.color,
+                }} />
+                <span>{t.label}</span>
+              </label>
+            );
+          })}
+          <div style={{
+            marginTop: 6, padding: 6,
+            borderTop: '1px solid var(--border-subtle)',
+            fontSize: 10, color: 'var(--muted)',
+            fontStyle: 'italic',
+          }}>
+            Phase C.2 scaffold — overlay rendering wires up next round.
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function buildAnnotationPalettes(families, familyColors) {
@@ -532,6 +778,34 @@ export default function StockAnalysis() {
   const [hiddenOverlays, setHiddenOverlays] = useState({});
   const toggleOverlay = (id) => setHiddenOverlays((m) => ({ ...m, [id]: !m[id] }));
 
+  // Phase C.2 scaffold — selected theory overlays, persisted per-ticker
+  // to localStorage so a navigation between tickers preserves intent.
+  const theoryStorageKey = `tb.analysis.theories.${ticker || 'SPY'}`;
+  const [selectedTheories, setSelectedTheoriesRaw] = useState(() => {
+    try {
+      const v = window.localStorage.getItem(theoryStorageKey);
+      return v ? JSON.parse(v) : [];
+    } catch (_) {
+      return [];
+    }
+  });
+  const setSelectedTheories = (next) => {
+    setSelectedTheoriesRaw(next);
+    try {
+      window.localStorage.setItem(theoryStorageKey, JSON.stringify(next));
+    } catch (_) { /* localStorage disabled — fine */ }
+  };
+  // When the ticker changes, re-hydrate from the new ticker's key.
+  useEffect(() => {
+    try {
+      const v = window.localStorage.getItem(theoryStorageKey);
+      setSelectedTheoriesRaw(v ? JSON.parse(v) : []);
+    } catch (_) {
+      setSelectedTheoriesRaw([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ticker]);
+
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -714,13 +988,13 @@ export default function StockAnalysis() {
               );
               const palettes = buildAnnotationPalettes(visibleFams, FAMILY_COLORS);
 
-              // Thesis cards — passed to the rail's bottom slot in
-              // fullscreen so the operator keeps the pattern context
-              // visible without leaving the chart.
-              const thesisCards = (
-                <div style={{ display: 'grid', gap: 8 }}>
+              // Phase C.1 — Thesis Context accordion. Replaces the
+              // prior flat stack with collapsible sections so the
+              // fullscreen rail isn't an unbroken column of cards.
+              const setupSection = (
+                <div style={{ display: 'grid', gap: 6 }}>
                   <CandidateCorrelationChip ticker={ticker} />
-                  {patternList.slice(0, 3).map((p) => {
+                  {patternList.slice(0, 2).map((p) => {
                     const k = data.knowledge[p];
                     const t = (data.theses || {})[p];
                     const fam = (data.observations || []).find((o) => o.pattern === p)?.family || 'uncategorized';
@@ -734,9 +1008,49 @@ export default function StockAnalysis() {
                       />
                     );
                   })}
+                  {patternList.length === 0 && (
+                    <div style={{
+                      padding: 10, fontSize: 12, color: 'var(--muted)',
+                      border: '1px solid var(--border-subtle)',
+                      borderRadius: 6,
+                    }}>
+                      ∅ No patterns matched the cohort grid yet.
+                    </div>
+                  )}
+                </div>
+              );
+              const detectorSection = (
+                <DetectorObservatory
+                  observations={data.observations || []}
+                  familyLabels={FAMILY_LABEL}
+                  familyColors={FAMILY_COLORS}
+                />
+              );
+              const insiderSection = (
+                <div style={{ display: 'grid', gap: 8 }}>
                   <InsiderActivityPanel ticker={ticker} />
                   <SmartMoneyPanel ticker={ticker} />
                 </div>
+              );
+              const theorySection = (
+                <TheorySelector ticker={ticker}
+                                selected={selectedTheories}
+                                onChange={setSelectedTheories} />
+              );
+              const thesisCards = (
+                <ThesisAccordion sections={[
+                  { id: 'theories', icon: '⚙', title: 'Theories on chart',
+                    badge: selectedTheories.length || null,
+                    content: theorySection },
+                  { id: 'setup', icon: '◎', title: 'Setup',
+                    badge: patternList.length || null,
+                    content: setupSection },
+                  { id: 'detectors', icon: '▣', title: 'Detector hits',
+                    badge: (data.observations || []).length || null,
+                    content: detectorSection },
+                  { id: 'insider', icon: '◆', title: 'Insider · 13F',
+                    content: insiderSection },
+                ]} />
               );
 
               return (
