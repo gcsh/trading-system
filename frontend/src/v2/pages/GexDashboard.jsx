@@ -119,6 +119,9 @@ export default function GexDashboard() {
   // `all` is the legacy front-month aggregation.
   const [expiration, setExpiration] = useState('all');
   const EXPIRATION_BUCKETS = ['0d', '1d', '5d', '7d', '14d', '30d', '60d', 'all'];
+  // Drill-down tab below the hero GEX-by-Strike chart. Default to
+  // Profile since it's the closest companion view.
+  const [drillTab, setDrillTab] = useState('profile');
   const { data: gex, error: gexErr, loading } = useGex(ticker, { refreshMs: 30_000, expiration });
   const { tick } = useLivePrice(ticker);
 
@@ -387,10 +390,78 @@ export default function GexDashboard() {
         </AlertBanner>
       )}
 
-      {/* THREE-COLUMN BODY */}
+      {/* THREE-COLUMN BODY — REDESIGNED:
+          LEFT: GEX Summary + Trade Plan + GEX Trend
+          CENTER: HERO GEX by Strike + Tabs (Profile/Heatmap/Expiry/Signals/Legend)
+          RIGHT: GEX Exposure by Expiry + Key Levels (more room than before)
+
+          Why this shape:
+          - One hero chart answers "where is spot vs walls + flip + regime"
+          - Secondary analytics live behind tabs to remove redundancy
+          - Key Levels gets a wider column (320px) so impact text isn't chopped
+       */}
       <div className="v2-gex-grid">
-        {/* LEFT COLUMN */}
+        {/* ─── LEFT RAIL ─── */}
         <div className="v2-gex-col v2-gex-col--left">
+          <Section title="Trade Plan" subtitle="three answers, plain English">
+            <Card>
+              <div className="v2-gex-plan">
+                <div className="v2-gex-plan__row">
+                  <div className="v2-gex-plan__label">SPOT</div>
+                  <div className="v2-gex-plan__val mono">{fmtMoney(livePrice)}</div>
+                </div>
+                <div className="v2-gex-plan__row">
+                  <div className="v2-gex-plan__label">REGIME</div>
+                  <Pill tone={netGex >= 0 ? 'success' : 'error'}>
+                    {netGex >= 0 ? 'Long γ — pin-friendly' : 'Short γ — trendy'}
+                  </Pill>
+                </div>
+                {gex?.call_wall != null && (
+                  <div className="v2-gex-plan__row">
+                    <div className="v2-gex-plan__label">RESIST ↑</div>
+                    <div className="v2-gex-plan__val mono">
+                      Call Wall <strong>{fmtMoney(gex.call_wall)}</strong>
+                    </div>
+                  </div>
+                )}
+                {gex?.put_wall != null && (
+                  <div className="v2-gex-plan__row">
+                    <div className="v2-gex-plan__label">SUPPORT ↓</div>
+                    <div className="v2-gex-plan__val mono">
+                      Put Wall <strong>{fmtMoney(gex.put_wall)}</strong>
+                    </div>
+                  </div>
+                )}
+                {gex?.gamma_flip != null && (
+                  <div className="v2-gex-plan__row">
+                    <div className="v2-gex-plan__label">γ FLIP</div>
+                    <div className="v2-gex-plan__val mono">
+                      <strong>{fmtMoney(gex.gamma_flip)}</strong>
+                      {gex?.distance_to_flip != null && (
+                        <span className="dim" style={{ marginLeft: 4 }}>
+                          ({(gex.distance_to_flip * 100).toFixed(1)}%)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {gex?.expected_move != null && (
+                  <div className="v2-gex-plan__row">
+                    <div className="v2-gex-plan__label">EXP. MOVE</div>
+                    <div className="v2-gex-plan__val mono">
+                      ±{fmtMoney(gex.expected_move)}
+                      {gex?.expected_move_pct != null && (
+                        <span className="dim" style={{ marginLeft: 4 }}>
+                          ({(gex.expected_move_pct * 100).toFixed(1)}%)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Card>
+          </Section>
+
           <Section title="GEX Summary" subtitle="snapshot">
             <Card>
               <div className="v2-gex-summary">
@@ -416,17 +487,6 @@ export default function GexDashboard() {
                     <span>Puts</span>
                     <span className="mono">{otmPutPct != null ? `${otmPutPct.toFixed(0)}%` : '—'}</span>
                   </div>
-                </div>
-                <div className="v2-gex-summary__skew">
-                  <div className="v2-gex-summary__otm-label">GEX Skew</div>
-                  <Pill tone={
-                    totalGex == null ? 'neutral'
-                    : totalGex > 0 ? 'success' : 'error'
-                  }>
-                    {totalGex == null ? '—'
-                     : totalGex > 0 ? 'Bullish (pinning ↑)'
-                     : 'Bearish (volatile ↓)'}
-                  </Pill>
                 </div>
               </div>
             </Card>
@@ -462,8 +522,164 @@ export default function GexDashboard() {
               )}
             </Card>
           </Section>
+        </div>
 
-          <Section title="Key Levels" subtitle="from /heatseeker">
+        {/* ─── CENTER: HERO CHART + DRILL-DOWN TABS ─── */}
+        <div className="v2-gex-col v2-gex-col--center">
+          <Section title="GEX by Strike — Hero"
+                   subtitle={enoughStrikes
+                     ? `${strikeCount} strikes · ±8% window · ${gex?.dealer_regime || 'regime —'}`
+                     : `${strikeCount} strikes — limited data`}>
+            <Card>
+              {enoughStrikes ? (
+                <GexByStrikeChart
+                  strikes={gex.gex_by_strike}
+                  spotPrice={livePrice}
+                  callWall={gex?.call_wall}
+                  putWall={gex?.put_wall}
+                  gammaFlip={gex?.gamma_flip}
+                  maxGammaStrike={gex?.max_gamma_strike}
+                  height={620} />
+              ) : (
+                <EmptyState icon="∅"
+                            message={`Limited strike data — ${strikeCount} strike${strikeCount === 1 ? '' : 's'} returned.`} />
+              )}
+            </Card>
+          </Section>
+
+          {/* Drill-down tab strip — swap secondary views without dragging
+              another full Card-height block onto the page. */}
+          <Section title="Drill-down"
+                   subtitle="secondary analytics — pick the lens you need">
+            <Card>
+              <div className="v2-gex-tabs">
+                {[
+                  { id: 'profile',  label: 'Profile' },
+                  { id: 'heatmap',  label: 'Heatmap' },
+                  { id: 'expiry',   label: 'Expiry Bars' },
+                  { id: 'dealer',   label: 'Dealer + Vol' },
+                  { id: 'legend',   label: 'How to Read' },
+                ].map((t) => (
+                  <button key={t.id}
+                          type="button"
+                          className={`v2-gex-tab ${drillTab === t.id ? 'v2-gex-tab--active' : ''}`}
+                          onClick={() => setDrillTab(t.id)}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+
+              {drillTab === 'profile' && (
+                enoughStrikes ? (
+                  <GexProfileChart
+                    strikes={gex.gex_by_strike}
+                    spotPrice={livePrice}
+                    callWall={gex?.call_wall}
+                    putWall={gex?.put_wall}
+                    gammaFlip={gex?.gamma_flip}
+                    height={240} />
+                ) : (
+                  <EmptyState icon="∅" message="Need ≥10 strikes for profile chart." />
+                )
+              )}
+
+              {drillTab === 'heatmap' && (
+                heatmap && heatmap.expCount >= 2 ? (
+                  <MiniHeatmap data={heatmap.matrix}
+                               rowLabels={heatmap.rowLabels}
+                               colLabels={heatmap.colLabels} />
+                ) : (
+                  <EmptyState
+                    icon="∅"
+                    message={heatmap
+                      ? `Multi-expiration GEX data not yet available — backend returned only ${heatmap.expCount} expiry (${heatmap.rowLabels[0] || 'n/a'}).`
+                      : 'Heatseeker did not return per-strike rows yet.'} />
+                )
+              )}
+
+              {drillTab === 'expiry' && (
+                <GexExpiryBars
+                  strikes={Array.isArray(gex?.gex_by_strike) ? gex.gex_by_strike : []}
+                  height={220} />
+              )}
+
+              {drillTab === 'dealer' && (
+                <div className="v2-gex-kpigrid">
+                  <Stat label="ATM IV"
+                        value={gex?.atm_iv != null ? `${(gex.atm_iv * 100).toFixed(1)}%` : '—'}
+                        compact mono />
+                  <Stat label="Expected Move"
+                        value={gex?.expected_move != null ? fmtMoney(gex.expected_move) : '—'}
+                        delta={gex?.expected_move_pct != null ? `${(gex.expected_move_pct * 100).toFixed(1)}%` : null}
+                        compact mono />
+                  <Stat label="Vol Trigger"
+                        value={fmtMoney(gex?.vol_trigger)} compact mono />
+                  <Stat label="Dist to Flip"
+                        value={gex?.distance_to_flip != null
+                          ? `${(gex.distance_to_flip * 100).toFixed(2)}%`
+                          : '—'}
+                        compact mono />
+                  <Stat label="Vanna Σ"
+                        value={fmtBig(gex?.total_vanna)} compact mono />
+                  <Stat label="Charm Σ"
+                        value={fmtBig(gex?.total_charm)} compact mono />
+                  <Stat label="Dealer Flow"
+                        value={gex?.dealer_flow || '—'}
+                        delta={gex?.dealer_flow_intensity != null
+                          ? `intensity ${(gex.dealer_flow_intensity).toFixed(2)}`
+                          : null}
+                        compact mono />
+                  <Stat label="0DTE Net γ"
+                        value={gex?.zero_dte_net_gex != null
+                          ? fmtBig(gex.zero_dte_net_gex)
+                          : 'n/a'}
+                        hint={gex?.zero_dte_share != null
+                          ? `${(gex.zero_dte_share * 100).toFixed(1)}% of total`
+                          : 'snapshot lacks 0DTE expiry'}
+                        compact mono />
+                </div>
+              )}
+
+              {drillTab === 'legend' && (
+                <ul className="v2-gex-legend">
+                  <li>
+                    <span className="v2-gex-legend__sw" style={{ background: 'var(--accent-green)' }} />
+                    <strong>Call GEX bars</strong> — dealer hedging supply above. Acts as resistance / pin.
+                  </li>
+                  <li>
+                    <span className="v2-gex-legend__sw" style={{ background: 'var(--accent-red)' }} />
+                    <strong>Put GEX bars</strong> — dealer hedging demand below. Acts as support / accelerant on breaks.
+                  </li>
+                  <li>
+                    <span className="v2-gex-legend__sw" style={{ background: 'rgba(241,245,249,0.85)', height: 3 }} />
+                    <strong>Net GEX line</strong> — call − put per strike. Positive = pin-friendly, negative = trendy.
+                  </li>
+                  <li>
+                    <span className="v2-gex-legend__sw v2-gex-legend__sw--dashed" style={{ borderColor: 'var(--accent-yellow)' }} />
+                    <strong>Spot (dotted)</strong> — current price tick from <code>/quote</code>.
+                  </li>
+                  <li>
+                    <span className="v2-gex-legend__sw" style={{ background: 'var(--accent-purple)' }} />
+                    <strong>γ Flip</strong> — where dealer regime inverts from short γ to long γ.
+                  </li>
+                </ul>
+              )}
+            </Card>
+          </Section>
+        </div>
+
+        {/* ─── RIGHT RAIL: Exposure by Expiry + Key Levels ─── */}
+        <div className="v2-gex-col v2-gex-col--right">
+          <Section title="GEX Exposure by Expiry"
+                   subtitle="bucketed by DTE">
+            <Card>
+              <GexExpiryBars
+                strikes={Array.isArray(gex?.gex_by_strike) ? gex.gex_by_strike : []}
+                height={220} />
+            </Card>
+          </Section>
+
+          <Section title="Key Levels" subtitle="3-5 levels that matter most">
             <Card>
               {keyLevels.length ? (
                 <Table cols={[
@@ -481,145 +697,6 @@ export default function GexDashboard() {
               ) : (
                 <EmptyState icon="∅" message="Heatseeker did not return walls/flip." />
               )}
-            </Card>
-          </Section>
-        </div>
-
-        {/* CENTER COLUMN — the centerpiece chart */}
-        <div className="v2-gex-col v2-gex-col--center">
-          <Section title="GEX by Strike"
-                   subtitle={enoughStrikes
-                     ? `${strikeCount} strikes · ±8% window around spot`
-                     : `${strikeCount} strikes — limited data`}>
-            <Card>
-              {enoughStrikes ? (
-                <GexByStrikeChart
-                  strikes={gex.gex_by_strike}
-                  spotPrice={livePrice}
-                  callWall={gex?.call_wall}
-                  putWall={gex?.put_wall}
-                  gammaFlip={gex?.gamma_flip}
-                  maxGammaStrike={gex?.max_gamma_strike}
-                  height={560} />
-              ) : (
-                <EmptyState icon="∅"
-                            message={`Limited strike data — ${strikeCount} strike${strikeCount === 1 ? '' : 's'} returned.`} />
-              )}
-            </Card>
-          </Section>
-
-          <Section title="GEX Profile (Aggregated)"
-                   subtitle="net GEX by strike with bullish / bearish zones">
-            <Card>
-              {enoughStrikes ? (
-                <GexProfileChart
-                  strikes={gex.gex_by_strike}
-                  spotPrice={livePrice}
-                  callWall={gex?.call_wall}
-                  putWall={gex?.put_wall}
-                  gammaFlip={gex?.gamma_flip}
-                  height={240} />
-              ) : (
-                <EmptyState icon="∅" message="Need ≥10 strikes for profile chart." />
-              )}
-            </Card>
-          </Section>
-
-          {/* Bonus signals strip — uses real backend scalars. */}
-          <Section title="Dealer + Volatility Signals">
-            <Card>
-              <div className="v2-gex-kpigrid">
-                <Stat label="ATM IV"
-                      value={gex?.atm_iv != null ? `${(gex.atm_iv * 100).toFixed(1)}%` : '—'}
-                      compact mono />
-                <Stat label="Expected Move"
-                      value={gex?.expected_move != null ? fmtMoney(gex.expected_move) : '—'}
-                      delta={gex?.expected_move_pct != null ? `${(gex.expected_move_pct * 100).toFixed(1)}%` : null}
-                      compact mono />
-                <Stat label="Vol Trigger"
-                      value={fmtMoney(gex?.vol_trigger)} compact mono />
-                <Stat label="Dist to Flip"
-                      value={gex?.distance_to_flip != null
-                        ? `${(gex.distance_to_flip * 100).toFixed(2)}%`
-                        : '—'}
-                      compact mono />
-                <Stat label="Vanna Σ"
-                      value={fmtBig(gex?.total_vanna)} compact mono />
-                <Stat label="Charm Σ"
-                      value={fmtBig(gex?.total_charm)} compact mono />
-                <Stat label="Dealer Flow"
-                      value={gex?.dealer_flow || '—'}
-                      delta={gex?.dealer_flow_intensity != null
-                        ? `intensity ${(gex.dealer_flow_intensity).toFixed(2)}`
-                        : null}
-                      compact mono />
-                <Stat label="0DTE Net γ"
-                      value={gex?.zero_dte_net_gex != null
-                        ? fmtBig(gex.zero_dte_net_gex)
-                        : 'n/a'}
-                      hint={gex?.zero_dte_share != null
-                        ? `${(gex.zero_dte_share * 100).toFixed(1)}% of total`
-                        : 'snapshot lacks 0DTE expiry'}
-                      compact mono />
-              </div>
-            </Card>
-          </Section>
-        </div>
-
-        {/* RIGHT COLUMN */}
-        <div className="v2-gex-col v2-gex-col--right">
-          <Section title="GEX Heatmap"
-                   subtitle={heatmap
-                     ? `${heatmap.expCount} expiration${heatmap.expCount === 1 ? '' : 's'} × ${heatmap.colLabels.length} strikes`
-                     : 'awaiting data'}>
-            <Card>
-              {heatmap && heatmap.expCount >= 2 ? (
-                <MiniHeatmap data={heatmap.matrix}
-                             rowLabels={heatmap.rowLabels}
-                             colLabels={heatmap.colLabels} />
-              ) : (
-                <EmptyState
-                  icon="∅"
-                  message={heatmap
-                    ? `Multi-expiration GEX data not yet available — backend returned only ${heatmap.expCount} expiry (${heatmap.rowLabels[0] || 'n/a'}).`
-                    : 'Heatseeker did not return per-strike rows yet.'} />
-              )}
-            </Card>
-          </Section>
-
-          <Section title="GEX Exposure by Expiry"
-                   subtitle="bucketed by DTE">
-            <Card>
-              <GexExpiryBars
-                strikes={Array.isArray(gex?.gex_by_strike) ? gex.gex_by_strike : []}
-                height={220} />
-            </Card>
-          </Section>
-
-          <Section title="How to Read">
-            <Card>
-              <ul className="v2-gex-legend">
-                <li>
-                  <span className="v2-gex-legend__sw" style={{ background: 'var(--accent-green)' }} />
-                  <strong>Call GEX bars</strong> — dealer hedging supply above. Acts as resistance / pin.
-                </li>
-                <li>
-                  <span className="v2-gex-legend__sw" style={{ background: 'var(--accent-red)' }} />
-                  <strong>Put GEX bars</strong> — dealer hedging demand below. Acts as support / accelerant on breaks.
-                </li>
-                <li>
-                  <span className="v2-gex-legend__sw" style={{ background: 'rgba(241,245,249,0.85)', height: 3 }} />
-                  <strong>Net GEX line</strong> — call − put per strike. Positive = pin-friendly, negative = trendy.
-                </li>
-                <li>
-                  <span className="v2-gex-legend__sw v2-gex-legend__sw--dashed" style={{ borderColor: 'var(--accent-yellow)' }} />
-                  <strong>Spot (dotted)</strong> — current price tick from <code>/quote</code>.
-                </li>
-                <li>
-                  <span className="v2-gex-legend__sw" style={{ background: 'var(--accent-purple)' }} />
-                  <strong>γ Flip</strong> — where dealer regime inverts from short γ to long γ.
-                </li>
-              </ul>
             </Card>
           </Section>
         </div>
@@ -795,6 +872,54 @@ export default function GexDashboard() {
         }
         @media (max-width: 1100px) {
           .v2-gex-kpigrid { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        /* Trade Plan — the 3-questions-answered panel at the top of the
+           left rail. Tight rows with a label + value column. */
+        .v2-gex-plan { display: flex; flex-direction: column; gap: 8px; }
+        .v2-gex-plan__row {
+          display: flex; justify-content: space-between; align-items: center;
+          gap: 8px;
+        }
+        .v2-gex-plan__label {
+          font-size: 10px; letter-spacing: 0.08em; font-weight: 700;
+          color: var(--text-tertiary); text-transform: uppercase;
+          min-width: 64px;
+        }
+        .v2-gex-plan__val {
+          font-size: 12px; color: var(--text-secondary); text-align: right;
+        }
+        .v2-gex-plan__val strong { color: var(--text-primary); font-weight: 700; }
+        .v2-gex-plan__val .dim { color: var(--text-tertiary); }
+
+        /* Drill-down tabs */
+        .v2-gex-tabs {
+          display: flex; gap: 4px; flex-wrap: wrap;
+          margin-bottom: 12px;
+          border-bottom: 1px solid var(--border-subtle);
+          padding-bottom: 8px;
+        }
+        .v2-gex-tab {
+          background: transparent;
+          border: 1px solid var(--border-subtle);
+          border-radius: var(--radius-sm);
+          color: var(--text-secondary);
+          padding: 4px 12px;
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: 0.05em;
+          text-transform: uppercase;
+          cursor: pointer;
+          transition: background 0.15s, color 0.15s, border-color 0.15s;
+        }
+        .v2-gex-tab:hover {
+          background: var(--bg-tertiary);
+          color: var(--text-primary);
+        }
+        .v2-gex-tab--active {
+          background: var(--accent-green-dim);
+          border-color: var(--accent-green);
+          color: var(--accent-green);
         }
 
         .v2-gex-legend {
