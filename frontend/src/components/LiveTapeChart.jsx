@@ -1,18 +1,21 @@
 /**
- * LiveTapeChart — candle history for any ticker in the scan universe
- * with the bot's own buy/sell markers overlaid.
+ * LiveTapeChart — professional candlestick + volume + pivots view for any
+ * ticker in the scan universe, with the bot's own buy/sell markers
+ * overlaid as arrows on the relevant candles.
  *
- * Improvements over the chips-only version:
- *   • Source: /authority/scan-universe (every ticker the bot will scan,
- *     not just ones with recent trades)
- *   • Dropdown selector (scales to 30+ tickers without crowding)
- *   • Period selector (1D / 5D / 1M / 3M / 6M)
- *   • Live price + change % in header (auto-refreshing)
- *   • Better axis labels + grid
- *   • Trade markers (▲ buy, ▼ sell) at exact price/time
- *   • Hover tooltip with date + price
+ * Rewrite (2026-06-13): switched from custom-SVG line chart to
+ * lightweight-charts (same library as TheoryChart). Visual target is
+ * the operator's reference image: clean candles, volume histogram with
+ * MA-20 in a sub-pane, current-price pill in green on the right axis,
+ * pivot point annotations (R1/PP/S1) labeled on the right edge, native
+ * crosshair, and a markets-closed pill so weekends don't look broken.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createChart,
+  CrosshairMode,
+  LineStyle,
+} from 'lightweight-charts';
 
 const PERIODS = [
   { key: '1D', period: '1d',  interval: '5m'  },
@@ -28,25 +31,60 @@ async function api(path) {
   return r.json();
 }
 
-function useWidth() {
-  const ref = useRef(null);
-  const [w, setW] = useState(900);
-  useEffect(() => {
-    if (!ref.current) return;
-    const ro = new ResizeObserver((entries) => {
-      for (const e of entries) setW(Math.max(280, e.contentRect.width));
-    });
-    ro.observe(ref.current);
-    return () => ro.disconnect();
-  }, []);
-  return [ref, w];
+function formatPrice(n) {
+  if (n == null || !Number.isFinite(n)) return '—';
+  return n.toFixed(2);
 }
 
-function formatPrice(n) {
-  if (n == null) return '—';
-  if (n >= 1000) return n.toFixed(0);
-  if (n >= 100) return n.toFixed(2);
-  return n.toFixed(2);
+/** Floor-seconds Unix timestamp for lightweight-charts time axis. */
+function toUnixSec(t) {
+  const ms = typeof t === 'string' ? new Date(t).getTime() : Number(t);
+  return Math.floor(ms / 1000);
+}
+
+/** Classic pivot points from the prior session's H/L/C. */
+function computePivots(candles) {
+  if (!candles || candles.length < 2) return null;
+  // Heuristic: pivots are most meaningful when computed from a daily
+  // session. For intraday data, group by trading date and use the
+  // prior date's aggregated H/L/C. For daily candles, use the prior bar.
+  const last = candles[candles.length - 1];
+  const lastDate = new Date(last.time * 1000).toDateString();
+  let h = -Infinity, l = Infinity, c = null;
+  for (let i = candles.length - 2; i >= 0; i--) {
+    const cd = candles[i];
+    const date = new Date(cd.time * 1000).toDateString();
+    if (date === lastDate) continue;
+    h = Math.max(h, cd.high);
+    l = Math.min(l, cd.low);
+    if (c === null) c = cd.close; // closest-to-now close in the prior session
+    // Stop once we cross to a session before the immediately prior one.
+    const cutoff = new Date(last.time * 1000);
+    cutoff.setDate(cutoff.getDate() - 2);
+    if (cd.time * 1000 < cutoff.getTime()) break;
+  }
+  if (!Number.isFinite(h) || !Number.isFinite(l) || c == null) {
+    const prev = candles[candles.length - 2];
+    h = prev.high; l = prev.low; c = prev.close;
+  }
+  const pp = (h + l + c) / 3;
+  return {
+    r1: 2 * pp - l,
+    pp,
+    s1: 2 * pp - h,
+  };
+}
+
+/** Rolling simple MA of an array of numbers. */
+function rollingMA(values, window) {
+  const out = new Array(values.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    sum += values[i];
+    if (i >= window) sum -= values[i - window];
+    if (i >= window - 1) out[i] = sum / window;
+  }
+  return out;
 }
 
 export default function LiveTapeChart() {
@@ -57,9 +95,13 @@ export default function LiveTapeChart() {
   const [candles, setCandles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [hover, setHover] = useState(null);
   const wrapRef = useRef(null);
-  const width = 900;  // fixed — SVG scales responsively
+  const chartContainerRef = useRef(null);
+  const chartRef = useRef(null);
+  const candleSeriesRef = useRef(null);
+  const volumeSeriesRef = useRef(null);
+  const volMaSeriesRef = useRef(null);
+  const pivotLinesRef = useRef([]);
 
   // Load scan universe + trade list once.
   useEffect(() => {
@@ -74,8 +116,6 @@ export default function LiveTapeChart() {
         const tickerList = u.tickers || [];
         setUniverse(tickerList);
         setTrades(ts || []);
-        // Initial pick: most-recently-traded ticker if any, else first
-        // ticker in the universe, else SPY.
         const recent = (ts || [])[0]?.ticker;
         if (recent && tickerList.includes(recent)) setTicker(recent);
         else if (tickerList.length) setTicker(tickerList[0]);
@@ -93,10 +133,23 @@ export default function LiveTapeChart() {
     setLoading(true);
     (async () => {
       try {
-        const c = await api(`/market/candles/${ticker}?period=${period.period}&interval=${period.interval}`);
+        const c = await api(
+          `/market/candles/${ticker}?period=${period.period}&interval=${period.interval}`,
+        );
         if (!active) return;
         const arr = c?.candles || c || [];
-        setCandles(Array.isArray(arr) ? arr : []);
+        const normalized = (Array.isArray(arr) ? arr : [])
+          .map((c) => ({
+            time: toUnixSec(c.time || c.t || c.timestamp),
+            open: Number(c.open ?? c.o),
+            high: Number(c.high ?? c.h),
+            low: Number(c.low ?? c.l),
+            close: Number(c.close ?? c.c),
+            volume: Number(c.volume ?? c.v ?? 0),
+          }))
+          .filter((c) => Number.isFinite(c.close) && Number.isFinite(c.time))
+          .sort((a, b) => a.time - b.time);
+        setCandles(normalized);
         setError(null);
       } catch (e) {
         setError(e.message);
@@ -107,7 +160,7 @@ export default function LiveTapeChart() {
     return () => { active = false; };
   }, [ticker, period]);
 
-  // Live trade refresh — pull trades for this ticker every 8s.
+  // Live trade refresh — every 8s.
   useEffect(() => {
     const id = setInterval(async () => {
       try { setTrades(await api('/trades/list?limit=200')); }
@@ -121,102 +174,231 @@ export default function LiveTapeChart() {
     [trades, ticker],
   );
 
-  // Build chart geometry. Fixed viewBox dimensions — SVG scales
-  // responsively via `style.width=100%` + preserveAspectRatio. Avoids
-  // letting useWidth drive viewBox into oblivion when the column is
-  // narrow OR the page reflows.
-  const chart = useMemo(() => {
-    if (!candles.length) return null;
-    const M = { t: 16, r: 14, b: 30, l: 56 };
-    const H = 260;
-    const W = 900;
+  // Build the chart exactly once per container mount.
+  useEffect(() => {
+    if (!chartContainerRef.current) return;
+    if (chartRef.current) return;
 
-    const points = candles.map((c) => {
-      const t = c.time || c.t || c.timestamp;
-      const close = Number(c.close ?? c.c);
-      const open = Number(c.open ?? c.o);
-      const high = Number(c.high ?? c.h);
-      const low = Number(c.low ?? c.l);
-      return { t: new Date(t).getTime(), close, open, high, low };
-    }).filter((p) => Number.isFinite(p.close));
+    const chart = createChart(chartContainerRef.current, {
+      layout: {
+        background: { color: 'transparent' },
+        textColor: 'rgba(220, 226, 235, 0.85)',
+        fontSize: 11,
+        fontFamily: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, sans-serif',
+      },
+      grid: {
+        vertLines: { color: 'rgba(255, 255, 255, 0.04)', style: LineStyle.Dotted },
+        horzLines: { color: 'rgba(255, 255, 255, 0.05)', style: LineStyle.Dotted },
+      },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: {
+          color: 'rgba(160, 110, 220, 0.7)',
+          width: 1,
+          style: LineStyle.Dashed,
+          labelBackgroundColor: '#221a33',
+        },
+        horzLine: {
+          color: 'rgba(160, 110, 220, 0.55)',
+          width: 1,
+          style: LineStyle.Dashed,
+          labelBackgroundColor: '#221a33',
+        },
+      },
+      rightPriceScale: {
+        borderColor: 'rgba(255, 255, 255, 0.06)',
+        scaleMargins: { top: 0.05, bottom: 0.28 },
+      },
+      timeScale: {
+        borderColor: 'rgba(255, 255, 255, 0.06)',
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 6,
+        barSpacing: 6,
+      },
+      width: chartContainerRef.current.clientWidth || 600,
+      height: chartContainerRef.current.clientHeight || 380,
+    });
 
-    if (!points.length) return null;
+    const candleSeries = chart.addCandlestickSeries({
+      upColor: '#22c55e',
+      downColor: '#ef4444',
+      borderUpColor: '#22c55e',
+      borderDownColor: '#ef4444',
+      wickUpColor: '#22c55e',
+      wickDownColor: '#ef4444',
+      priceLineVisible: true,
+      priceLineColor: '#22c55e',
+      priceLineWidth: 1,
+      priceLineStyle: LineStyle.Solid,
+      lastValueVisible: true,
+    });
 
-    const xs = points.map((p) => p.t);
-    const ys = points.map((p) => p.close);
-    const ymin = Math.min(...ys) * 0.998;
-    const ymax = Math.max(...ys) * 1.002;
-    const xmin = Math.min(...xs);
-    const xmax = Math.max(...xs);
-    const xScale = (x) => M.l + (W - M.l - M.r) * ((x - xmin) / (xmax - xmin || 1));
-    const yScale = (y) => H - M.b - (H - M.t - M.b) * ((y - ymin) / (ymax - ymin || 1));
+    const volumeSeries = chart.addHistogramSeries({
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'vol',
+      lastValueVisible: true,
+    });
+    chart.priceScale('vol').applyOptions({
+      scaleMargins: { top: 0.78, bottom: 0 },
+      borderColor: 'rgba(255, 255, 255, 0.04)',
+    });
 
-    const path = points.map((p, i) => {
-      const x = xScale(p.t); const y = yScale(p.close);
-      return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(' ');
+    const volMaSeries = chart.addLineSeries({
+      color: 'rgba(245, 158, 11, 0.85)',
+      lineWidth: 1,
+      priceScaleId: 'vol',
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+    });
 
-    // Area fill below the line for richer visual.
-    const areaPath = path
-      + ` L${xScale(xmax).toFixed(1)},${H - M.b}`
-      + ` L${xScale(xmin).toFixed(1)},${H - M.b} Z`;
+    chartRef.current = chart;
+    candleSeriesRef.current = candleSeries;
+    volumeSeriesRef.current = volumeSeries;
+    volMaSeriesRef.current = volMaSeries;
 
-    const last = points[points.length - 1];
-    const first = points[0];
-    const changeAbs = last.close - first.close;
-    const changePct = (first.close ? changeAbs / first.close : 0) * 100;
-    const positive = changeAbs >= 0;
+    const ro = new ResizeObserver((entries) => {
+      if (!chartRef.current) return;
+      for (const e of entries) {
+        chartRef.current.applyOptions({
+          width: Math.floor(e.contentRect.width),
+          height: Math.floor(e.contentRect.height),
+        });
+      }
+    });
+    ro.observe(chartContainerRef.current);
 
+    return () => {
+      ro.disconnect();
+      chart.remove();
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+      volMaSeriesRef.current = null;
+      pivotLinesRef.current = [];
+    };
+  }, []);
+
+  // Whenever candles / trades change, push fresh data into the series.
+  useEffect(() => {
+    if (!candleSeriesRef.current || candles.length === 0) return;
+
+    candleSeriesRef.current.setData(candles);
+
+    // Volume histogram — color matches the candle direction so the eye
+    // can read pressure direction at a glance.
+    const volData = candles.map((c) => ({
+      time: c.time,
+      value: c.volume,
+      color: c.close >= c.open ? 'rgba(34, 197, 94, 0.55)' : 'rgba(239, 68, 68, 0.55)',
+    }));
+    volumeSeriesRef.current.setData(volData);
+
+    // 20-period volume MA — orange line over the histogram.
+    const volumes = candles.map((c) => c.volume);
+    const ma = rollingMA(volumes, 20);
+    volMaSeriesRef.current.setData(
+      candles
+        .map((c, i) => (ma[i] == null ? null : { time: c.time, value: ma[i] }))
+        .filter(Boolean),
+    );
+
+    // Pivot point lines — drop the previous set, add the new.
+    if (candleSeriesRef.current && pivotLinesRef.current.length) {
+      for (const ln of pivotLinesRef.current) {
+        try { candleSeriesRef.current.removePriceLine(ln); } catch { /* noop */ }
+      }
+      pivotLinesRef.current = [];
+    }
+    const pivots = computePivots(candles);
+    if (pivots && candleSeriesRef.current) {
+      const r1 = candleSeriesRef.current.createPriceLine({
+        price: pivots.r1,
+        color: 'rgba(245, 158, 11, 0.85)',
+        lineWidth: 1,
+        lineStyle: LineStyle.Solid,
+        axisLabelVisible: true,
+        title: 'R1',
+      });
+      const pp = candleSeriesRef.current.createPriceLine({
+        price: pivots.pp,
+        color: 'rgba(255, 255, 255, 0.85)',
+        lineWidth: 1,
+        lineStyle: LineStyle.Dotted,
+        axisLabelVisible: true,
+        title: 'PP',
+      });
+      const s1 = candleSeriesRef.current.createPriceLine({
+        price: pivots.s1,
+        color: 'rgba(245, 158, 11, 0.85)',
+        lineWidth: 1,
+        lineStyle: LineStyle.Solid,
+        axisLabelVisible: true,
+        title: 'S1',
+      });
+      pivotLinesRef.current = [r1, pp, s1];
+    }
+
+    // Bot trade markers — buy=green-arrow-below, sell=red-arrow-above,
+    // placed on the candle whose time window contains the fill.
     const markers = tradesForTicker
       .map((t) => {
-        const tx = new Date(t.timestamp || t.t).getTime();
-        if (!tx || tx < xmin || tx > xmax) return null;
-        const side = (t.action || '').toUpperCase().startsWith('BUY')
-          ? 'buy' : (t.action || '').toUpperCase().startsWith('SELL') ? 'sell' : 'hold';
+        const ts = toUnixSec(t.timestamp || t.t);
+        if (!ts || ts < candles[0].time || ts > candles[candles.length - 1].time) return null;
+        const action = (t.action || '').toUpperCase();
+        const side = action.startsWith('BUY')
+          ? 'buy'
+          : action.startsWith('SELL')
+            ? 'sell'
+            : 'hold';
+        if (side === 'hold') return null;
         return {
-          id: t.id,
-          x: xScale(tx),
-          y: yScale(Number(t.price)),
-          price: Number(t.price),
-          side,
-          action: t.action,
-          ts: t.timestamp,
+          time: ts,
+          position: side === 'buy' ? 'belowBar' : 'aboveBar',
+          color: side === 'buy' ? '#22c55e' : '#ef4444',
+          shape: side === 'buy' ? 'arrowUp' : 'arrowDown',
+          text: `${action} ${Number(t.qty || t.quantity || 0).toFixed(2)} @ ${formatPrice(Number(t.price))}`,
         };
       })
-      .filter(Boolean);
+      .filter(Boolean)
+      .sort((a, b) => a.time - b.time);
 
-    return {
-      W, H, M, ymin, ymax, xmin, xmax,
-      points, path, areaPath,
-      last: last.close, first: first.close,
-      changeAbs, changePct, positive,
-      markers,
-    };
-  }, [candles, tradesForTicker, width]);
+    candleSeriesRef.current.setMarkers(markers);
 
-  // Hover handler — find closest point.
-  const onMouseMove = (e) => {
-    if (!chart) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width * chart.W;
-    if (x < chart.M.l || x > chart.W - chart.M.r) { setHover(null); return; }
-    // Find nearest point.
-    let best = null; let bestDist = Infinity;
-    for (const p of chart.points) {
-      const px = chart.M.l + (chart.W - chart.M.l - chart.M.r) *
-                  ((p.t - chart.xmin) / (chart.xmax - chart.xmin || 1));
-      const d = Math.abs(px - x);
-      if (d < bestDist) { bestDist = d; best = { ...p, x: px }; }
-    }
-    if (best) {
-      const py = chart.H - chart.M.b - (chart.H - chart.M.t - chart.M.b)
-                  * ((best.close - chart.ymin) / (chart.ymax - chart.ymin || 1));
-      setHover({ ...best, py });
-    }
-  };
+    // Fit the visible range after a data load — but only on first load
+    // for this ticker/period; otherwise the user's zoom is preserved.
+    if (candles.length) chartRef.current.timeScale().fitContent();
+  }, [candles, tradesForTicker]);
 
-  const buyMarkers = chart?.markers?.filter((m) => m.side === 'buy') || [];
-  const sellMarkers = chart?.markers?.filter((m) => m.side === 'sell') || [];
+  // Header price + change derived from the candle data (latest close vs
+  // first close in the visible range).
+  const headerStats = useMemo(() => {
+    if (!candles.length) return null;
+    const last = candles[candles.length - 1].close;
+    const first = candles[0].close;
+    const change = last - first;
+    const pct = first ? (change / first) * 100 : 0;
+    return { last, change, pct, positive: change >= 0 };
+  }, [candles]);
+
+  // Market-state pill — explains weekends/holidays/after-hours so the
+  // chart's terminal candle doesn't look like a bug.
+  const marketState = (() => {
+    const now = new Date();
+    const dow = now.getDay();
+    if (dow === 0) return { closed: true, label: 'Markets closed · Sunday', reopen: 'Reopens Mon 9:30 ET' };
+    if (dow === 6) return { closed: true, label: 'Markets closed · Saturday', reopen: 'Reopens Mon 9:30 ET' };
+    const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const m = et.getHours() * 60 + et.getMinutes();
+    if (m < 9 * 60 + 30) return { closed: true, label: 'Pre-market', reopen: 'Opens 9:30 ET' };
+    if (m >= 16 * 60) return { closed: true, label: 'After hours', reopen: 'Reopens 9:30 ET next session' };
+    return { closed: false, label: 'Markets open', reopen: '' };
+  })();
+
+  const lastCandleDate = candles.length
+    ? new Date(candles[candles.length - 1].time * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    : null;
 
   return (
     <div className="panel panel--markets" ref={wrapRef}>
@@ -230,15 +412,29 @@ export default function LiveTapeChart() {
             <h3 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: '-0.015em' }}>
               {ticker || '—'}
             </h3>
-            {chart && (
+            {headerStats && (
               <>
                 <span style={{ fontSize: 17, fontWeight: 600, fontFeatureSettings: '"tnum"' }}>
-                  ${formatPrice(chart.last)}
+                  ${formatPrice(headerStats.last)}
                 </span>
-                <span className={chart.positive ? 'pill on' : 'pill danger'}>
-                  {chart.positive ? '▲' : '▼'} {chart.positive ? '+' : ''}{chart.changePct.toFixed(2)}%
+                <span className={headerStats.positive ? 'pill on' : 'pill danger'}>
+                  {headerStats.positive ? '▲' : '▼'} {headerStats.positive ? '+' : ''}{headerStats.pct.toFixed(2)}%
                 </span>
               </>
+            )}
+            {marketState.closed && (
+              <span
+                title={marketState.reopen}
+                style={{
+                  fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
+                  textTransform: 'uppercase', padding: '3px 8px',
+                  borderRadius: 6, color: 'rgba(245, 158, 11, 1)',
+                  background: 'rgba(245, 158, 11, 0.12)',
+                  border: '1px solid rgba(245, 158, 11, 0.30)',
+                }}
+              >
+                {marketState.label}{lastCandleDate ? ` · last close ${lastCandleDate}` : ''}
+              </span>
             )}
           </div>
         </div>
@@ -256,7 +452,10 @@ export default function LiveTapeChart() {
               <option value={ticker}>{ticker}</option>
             )}
           </select>
-          <div className="row" style={{ gap: 2, background: 'var(--panel-2)', borderRadius: 8, padding: 2, border: '1px solid var(--border)' }}>
+          <div className="row" style={{
+            gap: 2, background: 'var(--panel-2)', borderRadius: 8, padding: 2,
+            border: '1px solid var(--border)',
+          }}>
             {PERIODS.map((p) => (
               <button
                 key={p.key}
@@ -277,177 +476,30 @@ export default function LiveTapeChart() {
       </div>
 
       {error && (
-        <div className="accent-bear" style={{ fontSize: 12, marginBottom: 8 }}>
-          {error}
+        <div className="empty" style={{ padding: 16, color: 'var(--danger)' }}>
+          chart error: {error}
         </div>
       )}
 
-      {loading && !chart && (
-        <div className="empty"><div className="title">Loading candles…</div></div>
-      )}
+      {/* Chart container — lightweight-charts manages its own canvas inside */}
+      <div
+        ref={chartContainerRef}
+        style={{
+          position: 'relative',
+          width: '100%',
+          height: 380,
+          marginTop: 8,
+          opacity: loading ? 0.55 : 1,
+          transition: 'opacity 200ms',
+        }}
+      />
 
-      {!loading && !chart && (
-        <div className="empty">
-          <div className="title">No candle data for {ticker}</div>
-          <div className="hint">Try a different period or ticker.</div>
-        </div>
-      )}
-
-      {chart && (
-        <div style={{ width: '100%', position: 'relative' }}>
-          <svg
-            viewBox={`0 0 ${chart.W} ${chart.H}`}
-            preserveAspectRatio="none"
-            style={{ width: '100%', height: 260, display: 'block', cursor: 'crosshair' }}
-            onMouseMove={onMouseMove}
-            onMouseLeave={() => setHover(null)}
-          >
-            <defs>
-              <linearGradient id="livetape-area" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={chart.positive ? 'var(--accent)' : 'var(--danger)'}
-                      stopOpacity="0.30" />
-                <stop offset="100%" stopColor={chart.positive ? 'var(--accent)' : 'var(--danger)'}
-                      stopOpacity="0.02" />
-              </linearGradient>
-            </defs>
-
-            {/* horizontal gridlines */}
-            {[0, 0.25, 0.5, 0.75, 1].map((r) => {
-              const y = chart.M.t + (chart.H - chart.M.t - chart.M.b) * r;
-              return (
-                <line key={r} x1={chart.M.l} x2={chart.W - chart.M.r}
-                      y1={y} y2={y}
-                      stroke="var(--border)" strokeWidth="0.5"
-                      strokeDasharray={r === 0 || r === 1 ? '0' : '2,3'} />
-              );
-            })}
-
-            {/* y-axis labels (4 levels) */}
-            {[0, 0.33, 0.66, 1].map((r) => {
-              const v = chart.ymax - (chart.ymax - chart.ymin) * r;
-              const y = chart.M.t + (chart.H - chart.M.t - chart.M.b) * r;
-              return (
-                <text key={r} x={chart.M.l - 8} y={y + 4}
-                      textAnchor="end" fontSize="10.5"
-                      fill="var(--muted)" fontFamily="ui-monospace, SFMono-Regular, monospace">
-                  ${formatPrice(v)}
-                </text>
-              );
-            })}
-
-            {/* x-axis labels (first / mid / last) */}
-            {[0, 0.5, 1].map((r) => {
-              const x = chart.M.l + (chart.W - chart.M.l - chart.M.r) * r;
-              const t = chart.xmin + (chart.xmax - chart.xmin) * r;
-              const d = new Date(t);
-              const label = period.key === '1D'
-                ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-                : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-              return (
-                <text key={r} x={x} y={chart.H - 8}
-                      textAnchor="middle" fontSize="10.5"
-                      fill="var(--muted)">
-                  {label}
-                </text>
-              );
-            })}
-
-            {/* area fill */}
-            <path d={chart.areaPath} fill="url(#livetape-area)" />
-
-            {/* price line */}
-            <path d={chart.path} fill="none"
-                  stroke={chart.positive ? 'var(--accent-2)' : 'var(--danger-2)'}
-                  strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
-
-            {/* trade markers */}
-            {chart.markers.map((m) => {
-              const fill = m.side === 'buy'
-                ? 'var(--accent)' : m.side === 'sell' ? 'var(--danger)' : 'var(--muted)';
-              const arrow = m.side === 'buy'
-                ? `M${m.x - 6},${m.y + 14} L${m.x + 6},${m.y + 14} L${m.x},${m.y + 4} Z`
-                : `M${m.x - 6},${m.y - 14} L${m.x + 6},${m.y - 14} L${m.x},${m.y - 4} Z`;
-              return (
-                <g key={m.id}>
-                  <line x1={m.x} x2={m.x}
-                        y1={chart.M.t} y2={chart.H - chart.M.b}
-                        stroke={fill} strokeOpacity="0.16" strokeWidth="1"
-                        strokeDasharray="2,2" />
-                  <circle cx={m.x} cy={m.y} r="4.5" fill={fill}
-                          stroke="var(--panel)" strokeWidth="2" />
-                  <path d={arrow} fill={fill} />
-                  <title>{`#${m.id} ${m.action} @ $${m.price?.toFixed(2)} · ${m.ts}`}</title>
-                </g>
-              );
-            })}
-
-            {/* hover crosshair */}
-            {hover && (
-              <g pointerEvents="none">
-                <line x1={hover.x} x2={hover.x}
-                      y1={chart.M.t} y2={chart.H - chart.M.b}
-                      stroke="var(--text-soft)" strokeOpacity="0.35"
-                      strokeWidth="1" strokeDasharray="3,3" />
-                <circle cx={hover.x} cy={hover.py} r="4"
-                        fill={chart.positive ? 'var(--accent-2)' : 'var(--danger-2)'}
-                        stroke="var(--panel)" strokeWidth="2" />
-              </g>
-            )}
-          </svg>
-
-          {/* hover tooltip — positioned absolutely above the SVG */}
-          {hover && (
-            <div style={{
-              position: 'absolute',
-              left: Math.min(width - 130, Math.max(8, (hover.x / chart.W) * width + 10)),
-              top: 10,
-              background: 'var(--panel-3)',
-              border: '1px solid var(--border-strong)',
-              borderRadius: 8,
-              padding: '6px 10px',
-              fontSize: 11.5,
-              fontFamily: 'ui-monospace, SFMono-Regular, monospace',
-              color: 'var(--text)',
-              pointerEvents: 'none',
-              boxShadow: 'var(--shadow-md)',
-            }}>
-              <div style={{ color: 'var(--muted)', fontSize: 10 }}>
-                {new Date(hover.t).toLocaleString(undefined, {
-                  month: 'short', day: 'numeric',
-                  hour: 'numeric', minute: '2-digit',
-                })}
-              </div>
-              <div style={{ fontWeight: 600, marginTop: 2 }}>
-                ${formatPrice(hover.close)}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {chart && (
-        <div className="row" style={{
-          marginTop: 10, fontSize: 11.5, color: 'var(--muted)',
-          gap: 16, flexWrap: 'wrap',
+      {tradesForTicker.length === 0 && !loading && (
+        <div style={{
+          marginTop: 6, fontSize: 11, color: 'var(--muted)',
+          padding: '0 4px',
         }}>
-          {buyMarkers.length > 0 && (
-            <span className="row" style={{ gap: 6 }}>
-              <span style={{ width: 9, height: 9, borderRadius: '50%', background: 'var(--accent)' }} />
-              {buyMarkers.length} bot buy{buyMarkers.length === 1 ? '' : 's'}
-            </span>
-          )}
-          {sellMarkers.length > 0 && (
-            <span className="row" style={{ gap: 6 }}>
-              <span style={{ width: 9, height: 9, borderRadius: '50%', background: 'var(--danger)' }} />
-              {sellMarkers.length} bot sell{sellMarkers.length === 1 ? '' : 's'}
-            </span>
-          )}
-          {!chart.markers.length && (
-            <span>No bot trades on {ticker} in this window — markers will appear when the bot acts.</span>
-          )}
-          <span style={{ marginLeft: 'auto' }}>
-            {chart.points.length} candles · {period.interval}
-          </span>
+          No bot trades on {ticker} in this window — markers will appear when the bot acts.
         </div>
       )}
     </div>
