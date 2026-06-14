@@ -29,19 +29,21 @@ export const TIMEFRAMES = ['1D', '1W', '1M', '3M', '6M', 'YTD', '1Y', '3Y', '5Y'
 // Updated 2026-06-14: long-range timeframes now request the matching
 // backend window (1y, 3y, 5y, max). Previously every long range
 // fell back to `all` which only fetched 30 days, so 3Y/5Y/MAX
-// always rendered ~6 months. Now the backend serves the right depth
-// and client-side trim is only used to slice WITHIN a downloaded
-// window (e.g. 1M slices the first 30 days from a `1m` fetch).
+// always rendered ~6 months. ThetaData EOD tends to over-fetch
+// (~2× the asked lookback), so we keep a client-side `trimDays`
+// guardrail on each long-range button so what's drawn matches the
+// button label. The Auto interval still uses `1d` here — picking
+// 1h/4h via the IntervalSelector hits a finer backend interval.
 export const TIMEFRAME_MAP = {
   '1D':  { backendWindow: 'today', trimDays: null  },
   '1W':  { backendWindow: '5d',    trimDays: null  },
-  '1M':  { backendWindow: '1m',    trimDays: null  },
-  '3M':  { backendWindow: '3m',    trimDays: null  },
-  '6M':  { backendWindow: '6m',    trimDays: null  },
+  '1M':  { backendWindow: '1m',    trimDays: 31    },
+  '3M':  { backendWindow: '3m',    trimDays: 95    },
+  '6M':  { backendWindow: '6m',    trimDays: 185   },
   'YTD': { backendWindow: '1y',    trimDays: 'ytd' },
-  '1Y':  { backendWindow: '1y',    trimDays: null  },
-  '3Y':  { backendWindow: '3y',    trimDays: null  },
-  '5Y':  { backendWindow: '5y',    trimDays: null  },
+  '1Y':  { backendWindow: '1y',    trimDays: 370   },
+  '3Y':  { backendWindow: '3y',    trimDays: 3 * 366 },
+  '5Y':  { backendWindow: '5y',    trimDays: 5 * 366 },
   'MAX': { backendWindow: 'max',   trimDays: null  },
 };
 
