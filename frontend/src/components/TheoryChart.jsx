@@ -101,6 +101,14 @@ export default function TheoryChart({
   const [hover, setHover] = useState(null);
   const [signalHover, setSignalHover] = useState(null);  // {x,y,signal,theory}
   const [chartHeight, setChartHeight] = useState(CHART_HEIGHT);
+  // Set to a new object once the async chart init finishes. Lets the
+  // dependent useEffects (candles, overlays, markers) re-run after the
+  // chart is actually ready. Without this, if bars arrive BEFORE the
+  // chart finishes mounting (lightweight-charts is dynamically
+  // imported), the first run of the candles effect sees a null
+  // series ref, early-returns, and never re-fires — the chart paints
+  // empty even though data exists.
+  const [chartReady, setChartReady] = useState(false);
 
   const allAnnotations = annotations || {};
   const palettesMap = palettes || {};
@@ -235,6 +243,10 @@ export default function TheoryChart({
         try { ro.disconnect(); } catch (_) { /* ignore */ }
         chart.remove();
       };
+
+      // Last step of async init — wakes up the candles / overlays
+      // effects so they re-run with a now-valid series ref.
+      if (!disposed) setChartReady(true);
     })();
     return () => {
       disposed = true;
@@ -245,6 +257,7 @@ export default function TheoryChart({
 
   // ── Candles + volume scaffold ─────────────────────────────────────
   useEffect(() => {
+    if (!chartReady) return;
     if (!candleSeriesRef.current || !volumeSeriesRef.current) return;
     if (!bars || !bars.length) return;
     const candles = bars.map((b) => ({
@@ -278,7 +291,7 @@ export default function TheoryChart({
     })).filter((p) => p.time > 0).sort((a, b) => a.time - b.time);
     if (volumeMaSeriesRef.current) volumeMaSeriesRef.current.setData(maPts);
     setTimeout(() => drawOverlay(), 0);
-  }, [bars]);
+  }, [bars, chartReady]);
 
   // ── MITS Phase 10.1 — live tick → update the rightmost forming candle.
   //
