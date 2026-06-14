@@ -80,7 +80,23 @@ export default function EquityCurve({ data: initialData }) {
   const [data, setData] = useState(initialData || []);
   const [datasetNote, setDatasetNote] = useState('');
   const [loading, setLoading] = useState(false);
+  // Trial-baseline starting capital ($5,000 unless an operator overrode it
+  // via /copilot/start-trial). Fetched once on mount so the "Trial Capital"
+  // stat is meaningful regardless of which range window is selected —
+  // otherwise "Start" would mean "first point visible in the current
+  // window" which can be misleading when the window doesn't reach back
+  // to trial inception.
+  const [trialCapital, setTrialCapital] = useState(null);
   const rangeMeta = RANGES.find((r) => r.id === range) || RANGES[RANGES.length - 1];
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/paper/state')
+      .then((r) => r.ok ? r.json() : null)
+      .then((j) => { if (!cancelled && j && typeof j.starting_cash === 'number') setTrialCapital(j.starting_cash); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   // Fetch own data on range change + on a range-appropriate polling
   // interval. Default `range=trial` returns the legacy slice; we map
@@ -206,19 +222,39 @@ export default function EquityCurve({ data: initialData }) {
         </div>
       </div>
 
-      {/* Summary strip */}
+      {/* Summary strip — Trial Capital is the paper-trial baseline
+          ($5,000 from paper_account.starting_cash). Window Start is the
+          first snapshot in the currently-selected range. They are
+          intentionally separate stats: the trial baseline never changes
+          across range buttons, the window start does. */}
       <div className="row" style={{
         gap: 24, padding: '12px 4px 14px', flexWrap: 'wrap',
         borderBottom: '1px solid var(--border)', marginBottom: 12,
       }}>
-        <Stat label="Start" value={money(stats.startVal)}
+        {trialCapital != null && (
+          <Stat
+            label="Trial capital"
+            value={money(trialCapital)}
+            accent="var(--accent-2)"
+            sub="trial baseline"
+          />
+        )}
+        <Stat label="Window start" value={money(stats.startVal)}
           sub={shortDate(stats.first.timestamp)} />
         <Stat
           label="Current"
           value={money(stats.currentVal)}
           accent={positive ? 'var(--accent)' : 'var(--danger)'}
-          sub={`${positive ? '+' : ''}${money(stats.change)} (${positive ? '+' : ''}${stats.changePct.toFixed(2)}%)`}
+          sub={`${positive ? '+' : ''}${money(stats.change)} (${positive ? '+' : ''}${stats.changePct.toFixed(2)}%) vs window`}
         />
+        {trialCapital != null && (
+          <Stat
+            label="vs trial"
+            value={`${stats.currentVal >= trialCapital ? '+' : ''}${money(stats.currentVal - trialCapital)}`}
+            accent={stats.currentVal >= trialCapital ? 'var(--accent)' : 'var(--danger)'}
+            sub={`${stats.currentVal >= trialCapital ? '+' : ''}${(((stats.currentVal - trialCapital) / trialCapital) * 100).toFixed(2)}%`}
+          />
+        )}
         <Stat label="Peak" value={money(stats.peak)} accent="var(--accent-2)" />
         <Stat label="Trough" value={money(stats.trough)} accent="var(--muted)" />
         <Stat label="Max drawdown" value={`${stats.maxDDPct.toFixed(2)}%`}
