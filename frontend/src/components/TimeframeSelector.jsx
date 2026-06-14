@@ -1,59 +1,70 @@
 /**
- * Feature-Merge F4 — 10-button timeframe selector.
+ * Timeframe selector — single compact dropdown.
  *
- * Renders a horizontal row of 10 timeframe buttons:
- *   1D / 1W / 1M / 3M / 6M / YTD / 1Y / 3Y / 5Y / MAX
- *
- * Driven by the canonical useChartTimeframe hook so:
- *   - Same hook = same persisted state across pages.
- *   - 1W / 3Y / 5Y are served by 5d-or-all backend windows + a client
- *     trim; the wrapper above does NOT need to know that.
- *
- * Styling deliberately matches the existing in-app `btn small / primary`
- * pattern so the row blends into both StockAnalysis and TheoryStudio
- * without design changes (no v2/* imports — hard rule of this merge).
+ * Replaces the previous 10-button row. Same `value` / `onChange` API
+ * so callers (StockAnalysis, TheoryStudio) don't need to change.
  */
 import React from 'react';
 import { TIMEFRAMES } from '../hooks/useChartTimeframe.js';
+
+const LABELS = {
+  '1D':  '1 Day',
+  '1W':  '1 Week',
+  '1M':  '1 Month',
+  '3M':  '3 Months',
+  '6M':  '6 Months',
+  'YTD': 'Year to Date',
+  '1Y':  '1 Year',
+  '3Y':  '3 Years',
+  '5Y':  '5 Years',
+  'MAX': 'Max history',
+};
 
 export default function TimeframeSelector({
   value, onChange, compact = false, style = {},
 }) {
   return (
-    <div
-      className="tb-timeframe-selector row"
-      role="tablist"
-      aria-label="Chart timeframe"
+    <label
+      className="tb-timeframe-selector"
       style={{
-        display: 'flex',
-        gap: 4,
-        flexWrap: 'wrap',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        fontSize: compact ? 10 : 11,
         ...style,
       }}
     >
-      {TIMEFRAMES.map((tf) => {
-        const active = value === tf;
-        return (
-          <button
-            key={tf}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            data-tf={tf}
-            data-testid={`tf-${tf}`}
-            className={`btn small ${active ? 'primary' : ''}`}
-            onClick={() => onChange && onChange(tf)}
-            style={{
-              padding: compact ? '2px 6px' : '3px 9px',
-              fontSize: compact ? 10 : 11,
-              minWidth: compact ? 26 : 32,
-              fontWeight: active ? 700 : 500,
-            }}
-          >
-            {tf}
-          </button>
-        );
-      })}
-    </div>
+      <span style={{
+        textTransform: 'uppercase',
+        letterSpacing: '0.06em',
+        color: 'var(--muted, #8593b0)',
+        fontWeight: 700,
+        fontSize: compact ? 9 : 10,
+      }}>
+        Timeframe
+      </span>
+      <select
+        data-testid="timeframe-select"
+        value={value}
+        onChange={(e) => onChange && onChange(e.target.value)}
+        style={{
+          background: 'var(--bg-secondary, #0d111f)',
+          border: '1px solid var(--border-subtle, #2a3349)',
+          color: 'var(--text-primary, #e6edf3)',
+          padding: compact ? '2px 6px' : '4px 8px',
+          fontSize: compact ? 11 : 12,
+          fontWeight: 600,
+          borderRadius: 6,
+          minWidth: compact ? 72 : 96,
+          cursor: 'pointer',
+        }}
+      >
+        {TIMEFRAMES.map((tf) => (
+          <option key={tf} value={tf}>
+            {tf} · {LABELS[tf] || tf}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }

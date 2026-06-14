@@ -1342,15 +1342,10 @@ export default function StockAnalysis() {
                           chartRefs={chartRefs}
                           activeTool={drawingTool}
                           shapes={drawings}
-                          selectedId={selectedDrawingId}
-                          setSelectedId={setSelectedDrawingId}
                           addShape={addDrawing}
                           removeShape={removeDrawing}
-                          updateShape={updateDrawing}
-                          duplicateShape={duplicateDrawing}
                           undo={undoDrawing}
                           redo={redoDrawing}
-                          onToolReset={() => setDrawingTool('cursor')}
                         />
                         {drawings.length > 0 && (
                           <button
