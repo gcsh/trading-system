@@ -192,7 +192,13 @@ function ThesisAccordion({ sections }) {
                  border: '1px solid var(--border-subtle)',
                  borderRadius: 6,
                  background: open ? 'var(--bg-secondary)' : 'transparent',
-                 overflow: 'hidden',
+                 // overflow MUST be visible so the TheorySelector
+                 // dropdown (and any future absolutely-positioned
+                 // children) can extend past the section's bottom
+                 // edge. Earlier `overflow: hidden` was clipping the
+                 // dropdown to "nothing visible to select".
+                 overflow: 'visible',
+                 position: 'relative',
                }}>
             <button type="button"
                     onClick={() => setOpenIdx(open ? -1 : i)}
@@ -290,7 +296,12 @@ function TheorySelector({ ticker, selected, onChange }) {
           marginTop: 4, padding: 6,
           background: 'var(--bg-secondary)',
           border: '1px solid var(--border-subtle)',
-          borderRadius: 6, zIndex: 10,
+          borderRadius: 6,
+          // z-index has to clear (a) sibling accordion sections that
+          // render below this one in DOM order, and (b) any chart
+          // canvases the wrapper might layer on top. 50 is well
+          // above the SPA's typical surface stack.
+          zIndex: 50,
           boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
         }}>
           {THEORY_CATALOG.map((t) => {
