@@ -130,13 +130,18 @@
   font-weight: 600;
 }
 .v2-stat__value {
-  font-size: var(--font-size-2xl);
+  font-size: var(--font-size-xl);
   color: var(--text-primary);
   font-weight: 700;
   line-height: 1.1;
   margin-top: var(--space-1);
 }
 .v2-stat__value--mono { font-family: var(--font-mono); }
+/* Compact variant for dense KPI grids inside a single Card. The default
+   `2xl` headline font overwhelms cards that pack 4-8 stats — drop to lg
+   so they read as a roster, not a stack of bumper-sticker numbers. */
+.v2-stat--compact .v2-stat__value { font-size: var(--font-size-lg); }
+.v2-stat--compact .v2-stat__label { font-size: 10px; letter-spacing: 0.08em; }
 .v2-stat__delta {
   font-size: var(--font-size-sm);
   margin-top: var(--space-1);

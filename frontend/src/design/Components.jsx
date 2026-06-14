@@ -40,12 +40,14 @@ export function Card({
 /* ───────────────────────────────────────────────────────────────────
  * Stat — labelled numeric KPI.
  * ─────────────────────────────────────────────────────────────────── */
-export function Stat({ label, value, delta, deltaPositive, mono = false, hint }) {
+export function Stat({
+  label, value, delta, deltaPositive, mono = false, hint, compact = false,
+}) {
   let deltaCls = 'v2-stat__delta--flat';
   if (deltaPositive === true) deltaCls = 'v2-stat__delta--pos';
   else if (deltaPositive === false) deltaCls = 'v2-stat__delta--neg';
   return (
-    <div className="v2-stat" title={hint || undefined}>
+    <div className={`v2-stat ${compact ? 'v2-stat--compact' : ''}`} title={hint || undefined}>
       <div className="v2-stat__label">{label}</div>
       <div className={`v2-stat__value ${mono ? 'v2-stat__value--mono' : ''}`}>
         {value}

@@ -134,7 +134,7 @@ export default function GexProfileChart({
   return (
     <div className="v2-gex-profile" style={{ width: '100%' }}>
       <svg viewBox={`0 0 ${VW} ${VH}`}
-           preserveAspectRatio="none"
+           preserveAspectRatio="xMidYMid meet"
            width="100%" height={height}
            style={{ display: 'block' }}>
 

@@ -381,15 +381,15 @@ export default function GexDashboard() {
                 <Stat label="Total GEX" value={fmtBig(totalGex)}
                       deltaPositive={totalGex >= 0}
                       delta={totalGexBias}
-                      mono />
+                      compact mono />
                 <Stat label="Call GEX" value={fmtBig(callGex)}
-                      deltaPositive={true} mono />
+                      deltaPositive={true} compact mono />
                 <Stat label="Put GEX" value={fmtBig(putGex)}
-                      deltaPositive={false} mono />
+                      deltaPositive={false} compact mono />
                 <Stat label="Net GEX" value={fmtBig(netGex)}
                       deltaPositive={netGex >= 0}
                       hint={gex?.dealer_regime ? `dealer: ${gex.dealer_regime}` : null}
-                      mono />
+                      compact mono />
                 <div className="v2-gex-summary__otm">
                   <div className="v2-gex-summary__otm-label">% OTM GEX</div>
                   <div className="v2-gex-summary__otm-row">
@@ -515,28 +515,28 @@ export default function GexDashboard() {
               <div className="v2-gex-kpigrid">
                 <Stat label="ATM IV"
                       value={gex?.atm_iv != null ? `${(gex.atm_iv * 100).toFixed(1)}%` : '—'}
-                      mono />
+                      compact mono />
                 <Stat label="Expected Move"
                       value={gex?.expected_move != null ? fmtMoney(gex.expected_move) : '—'}
                       delta={gex?.expected_move_pct != null ? `${(gex.expected_move_pct * 100).toFixed(1)}%` : null}
-                      mono />
+                      compact mono />
                 <Stat label="Vol Trigger"
-                      value={fmtMoney(gex?.vol_trigger)} mono />
+                      value={fmtMoney(gex?.vol_trigger)} compact mono />
                 <Stat label="Dist to Flip"
                       value={gex?.distance_to_flip != null
                         ? `${(gex.distance_to_flip * 100).toFixed(2)}%`
                         : '—'}
-                      mono />
+                      compact mono />
                 <Stat label="Vanna Σ"
-                      value={fmtBig(gex?.total_vanna)} mono />
+                      value={fmtBig(gex?.total_vanna)} compact mono />
                 <Stat label="Charm Σ"
-                      value={fmtBig(gex?.total_charm)} mono />
+                      value={fmtBig(gex?.total_charm)} compact mono />
                 <Stat label="Dealer Flow"
                       value={gex?.dealer_flow || '—'}
                       delta={gex?.dealer_flow_intensity != null
                         ? `intensity ${(gex.dealer_flow_intensity).toFixed(2)}`
                         : null}
-                      mono />
+                      compact mono />
                 <Stat label="0DTE Net γ"
                       value={gex?.zero_dte_net_gex != null
                         ? fmtBig(gex.zero_dte_net_gex)
@@ -544,7 +544,7 @@ export default function GexDashboard() {
                       hint={gex?.zero_dte_share != null
                         ? `${(gex.zero_dte_share * 100).toFixed(1)}% of total`
                         : 'snapshot lacks 0DTE expiry'}
-                      mono />
+                      compact mono />
               </div>
             </Card>
           </Section>

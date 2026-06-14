@@ -185,8 +185,12 @@ export default function GexByStrikeChart({
 
   return (
     <div className="v2-gex-strikechart" style={{ width: '100%' }}>
+      {/* `preserveAspectRatio="none"` stretches the SVG to fill the
+          container, which makes the bars look like spaghetti when the
+          panel is much wider than the 1000-unit viewBox (the Intel-tab
+          context). `xMidYMid meet` keeps the chart honest and centers it. */}
       <svg viewBox={`0 0 ${VW} ${VH}`}
-           preserveAspectRatio="none"
+           preserveAspectRatio="xMidYMid meet"
            width="100%" height={height}
            style={{ display: 'block' }}>
         {/* Backdrop grid lines (vertical, at each x-tick). */}
