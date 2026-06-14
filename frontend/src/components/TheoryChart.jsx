@@ -87,6 +87,7 @@ function scheduleIdle(cb) {
 
 export default function TheoryChart({
   bars, annotations, palettes, primaryTheory, liveTick,
+  hideLegend = false,
 }) {
   const containerRef = useRef(null);
   const overlayRef = useRef(null);
@@ -1003,8 +1004,10 @@ export default function TheoryChart({
         </div>
       )}
 
-      {/* Multi-theory legend bottom-left, scrollable when ≥3 theories. */}
-      {legendItems.length > 0 && (
+      {/* Multi-theory legend bottom-left, scrollable when ≥3 theories.
+          StockAnalysis hides this since the right-rail accordion is the
+          source of truth there; Theory Studio keeps it. */}
+      {!hideLegend && legendItems.length > 0 && (
         <div style={{
           position: 'absolute', bottom: 10, left: 14,
           background: 'rgba(13,17,31,0.88)',

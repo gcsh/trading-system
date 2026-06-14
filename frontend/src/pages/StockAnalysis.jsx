@@ -30,6 +30,7 @@ import useChartTimeframe from '../hooks/useChartTimeframe.js';
 import useChartInterval from '../hooks/useChartInterval.js';
 import useAnalysisBars from '../hooks/swr/useAnalysisBars.js';
 import useTheoryOverlays from '../hooks/swr/useTheoryOverlays.js';
+import { useLivePrice } from '../lib/useLivePrice.js';
 import { THEORY_CATALOG, THEORY_BY_ID, migrateTheoryIds }
   from '../analysis/theoryCatalog.js';
 import DrawingToolbar from '../analysis/DrawingToolbar.jsx';
@@ -906,6 +907,12 @@ export default function StockAnalysis() {
     ? canonicalBars
     : (data?.bars || []);
 
+  // Phase D.1.2 — live tick into the rightmost candle. Polls
+  // /market/last/{ticker} every 4s; the chart's existing liveTick
+  // effect grafts the new price onto the last bar without re-rendering
+  // the whole series so it ticks smoothly during RTH.
+  const liveTick = useLivePrice(ticker, { intervalMs: 4000 });
+
   // Phase C.2 — multi-theory overlay fetch. Returns annotation dicts
   // keyed by backend theory name. Skipped (no fetch) when nothing is
   // selected so a cold page burns zero requests on theories.
@@ -938,6 +945,29 @@ export default function StockAnalysis() {
               correct backend window + client trim via useChartTimeframe. */}
           <TimeframeSelector value={timeframe} onChange={setTimeframe} />
           <IntervalSelector value={interval} onChange={setInterval} />
+          {liveTick && liveTick.price && (
+            <span
+              data-testid="analysis-live-pill"
+              title={`Live: $${Number(liveTick.price).toFixed(2)}  source=${liveTick.source || ''}`}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                padding: '2px 7px',
+                background: 'rgba(38, 208, 124, 0.14)',
+                color: '#26d07c',
+                fontSize: 10, fontWeight: 700,
+                letterSpacing: '0.04em',
+                textTransform: 'uppercase',
+                borderRadius: 999,
+                border: '1px solid rgba(38, 208, 124, 0.35)',
+              }}
+            >
+              <span style={{
+                width: 6, height: 6, borderRadius: '50%',
+                background: '#26d07c',
+              }} />
+              Live ${Number(liveTick.price).toFixed(2)}
+            </span>
+          )}
           {/* Phase C.4 — Cmd-K palette opener. Visible affordance so
               new operators discover the keyboard shortcut. */}
           <button
@@ -1190,6 +1220,8 @@ export default function StockAnalysis() {
                         annotations={annotations}
                         palettes={palettes}
                         primaryTheory={Object.keys(annotations)[0] || null}
+                        liveTick={liveTick}
+                        hideLegend
                       />
                     ) : (
                       <div className="panel" style={{
