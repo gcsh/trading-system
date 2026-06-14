@@ -96,8 +96,19 @@ WINDOW_MAP: Dict[str, Dict[str, Any]] = {
     "6m":  {"lookback_days":  180, "interval": "1d", "min_bars":  110, "aggregate_to": "D"},
     "1y":  {"lookback_days":  365, "interval": "1d", "min_bars":  220, "aggregate_to": "D"},
     "2y":  {"lookback_days":  730, "interval": "1d", "min_bars":  100, "aggregate_to": "W"},
+    # 3y added 2026-06-14 so the StockAnalysis 3Y button's theory
+    # overlay fetch doesn't 400 silently. min_bars relaxed because
+    # short-history tickers in the corpus should still resolve.
+    "3y":  {"lookback_days": 1095, "interval": "1d", "min_bars":  150, "aggregate_to": "W"},
     "5y":  {"lookback_days": 1825, "interval": "1d", "min_bars":  240, "aggregate_to": "W"},
     "max": {"lookback_days": 3650, "interval": "1d", "min_bars":  100, "aggregate_to": "M"},
+    # Short-range slugs so /theories/multi accepts whatever the
+    # chart's timeframe widget hands it. Intraday bars produce
+    # noisier overlays so callers should prefer 1m+ for serious
+    # analysis, but the endpoint should never 400 on these.
+    "today": {"lookback_days":  3, "interval": "5m",  "min_bars":   30, "aggregate_to": "D"},
+    "5d":    {"lookback_days":  7, "interval": "15m", "min_bars":   50, "aggregate_to": "D"},
+    "all":   {"lookback_days": 30, "interval": "1h",  "min_bars":  100, "aggregate_to": "D"},
 }
 
 

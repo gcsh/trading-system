@@ -121,12 +121,20 @@ def _fetch_bars_thetadata(
         end = date.today()
         start = end - timedelta(days=max(1, lookback_days))
         base = _thetadata_base_url()
+        # ThetaData v3 endpoints expect compact YYYYMMDD; ISO form
+        # (`YYYY-MM-DD`) silently returns 4xx and the caller falls
+        # back to yfinance. Sister module `thetadata_stocks.py`
+        # already uses this form — staying consistent kills the
+        # silent fallback that hid behind the "bar_source=yfinance"
+        # pill on long-range analysis windows.
+        start_compact = start.strftime("%Y%m%d")
+        end_compact = end.strftime("%Y%m%d")
         if interval == "1d":
             url = f"{base}/v3/stock/history/eod"
             params = {
                 "symbol": ticker.upper(),
-                "start_date": start.isoformat(),
-                "end_date": end.isoformat(),
+                "start_date": start_compact,
+                "end_date": end_compact,
                 "format": "json",
             }
         else:
@@ -136,8 +144,8 @@ def _fetch_bars_thetadata(
             url = f"{base}/v3/stock/history/ohlc"
             params = {
                 "symbol": ticker.upper(),
-                "start_date": start.isoformat(),
-                "end_date": end.isoformat(),
+                "start_date": start_compact,
+                "end_date": end_compact,
                 "interval": label,
                 "venue": "utp_cta",
                 "format": "json",
