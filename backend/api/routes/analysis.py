@@ -189,7 +189,10 @@ def _fetch_bars(ticker: str, period: str, interval: str) -> List[Dict[str, Any]]
     map sensibly via :func:`_shared_fetch_bars`. Records the resolved
     source in a module-level dict so the route can surface it without
     re-fetching."""
-    window = period if period in {"today", "5d", "all"} else "today"
+    _VALID_WINDOWS = {
+        "today", "5d", "1m", "3m", "6m", "1y", "3y", "5y", "max", "all",
+    }
+    window = period if period in _VALID_WINDOWS else "today"
     bars, source = _fetch_bars_with_source(ticker, window, interval)
     _last_bar_source[(ticker.upper(), window)] = source
     return bars
