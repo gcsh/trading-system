@@ -63,11 +63,38 @@ def quote(ticker: str) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         logger.exception("quote_source.get_quote failed for %s", sym)
         raise HTTPException(status_code=500, detail=str(exc))
+    # 2026-06-15 — explicit freshness flags so the UI doesn't have to
+    # substring-match `*_stale`. Operator caught Theory Studio /
+    # Analysis labelling stale yfinance data as "LIVE" — fix that at
+    # the data boundary, not in every chart component.
+    APPROVED_LIVE_SOURCES = {"alpaca", "thetadata"}
+    MAX_FRESH_AGE_SEC = 30.0
+    src = (q.source or "").lower()
+    age = q.age_seconds if q.age_seconds is not None else 1e9
+    is_fresh = (
+        src in APPROVED_LIVE_SOURCES
+        and age <= MAX_FRESH_AGE_SEC
+        and float(q.price or 0) > 0
+    )
+    is_stale = src.endswith("_stale") or src.endswith("_previous") or age > MAX_FRESH_AGE_SEC
+    # market_status: "live" (fresh quote), "closed" (stale > 6h —
+    # weekend/holiday), "delayed" (stale but < 6h — likely after-hours)
+    if is_fresh:
+        market_status = "live"
+    elif age >= 6 * 3600:
+        market_status = "closed"
+    else:
+        market_status = "delayed"
+
     payload: Dict[str, Any] = {
         "ticker": sym,
         "price": float(q.price or 0.0),
         "source": q.source,
         "age_seconds": q.age_seconds,
+        "is_fresh": is_fresh,
+        "is_stale": is_stale,
+        "market_status": market_status,
+        "approved_source": src in APPROVED_LIVE_SOURCES,
         "ts": datetime.now(timezone.utc).isoformat(),
         "cached": False,
     }

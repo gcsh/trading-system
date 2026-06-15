@@ -967,6 +967,110 @@ def rule_portfolio_context_failed(
     return None
 
 
+def rule_market_data_integrity(
+    ctx: PolicyContext,
+) -> Optional[BlockingFactor]:
+    """2026-06-15 — refuse trades when the live quote can't be trusted.
+
+    Catches three failure modes:
+      * `quote.source` not in the approved live-feed whitelist
+        (anything ending in ``_stale`` / ``_previous`` is rejected —
+        these are yfinance fallbacks from `quote_source.get_quote`)
+      * `quote.age_seconds` > 30s — the print is too old to act on
+      * Engine-computed snapshot price diverges from the live quote by
+        more than 0.5% — the two layers disagree, refuse to size
+
+    This is the gate that would have blocked Monday-open trading on
+    stale weekend yfinance data. Lives ahead of `rule_naked_short_block`
+    so a bad-feed cycle never gets near sizing or collateral checks.
+    """
+    APPROVED_SOURCES = {"alpaca", "thetadata"}
+    MAX_AGE_SEC = 30.0
+    MAX_PRICE_DRIFT_PCT = 0.5   # 0.5% — generous for stocks
+
+    # Fetch fresh quote and compare with the snapshot price the engine
+    # already has (signal.metadata snapshot.price OR data.price).
+    try:
+        from backend.bot.data.quote_source import get_quote
+        q = get_quote(ctx.ticker.upper())
+    except Exception as exc:   # noqa: BLE001
+        # Quote resolver itself is broken — block hard.
+        return BlockingFactor(
+            category="data_quality", rule="market_data_integrity",
+            severity="hard",
+            reason=f"quote_source.get_quote raised: {str(exc)[:120]}",
+            evidence={"failure_mode": "quote_resolver_exception"},
+            legacy_status="market_data_integrity",
+        )
+
+    src = (q.source or "").lower()
+    age = q.age_seconds if q.age_seconds is not None else 1e9
+
+    if src not in APPROVED_SOURCES:
+        return BlockingFactor(
+            category="data_quality", rule="market_data_integrity",
+            severity="hard",
+            reason=(
+                f"feed source '{q.source}' not in approved "
+                f"{sorted(APPROVED_SOURCES)} — refusing to act on "
+                f"non-realtime data"
+            ),
+            evidence={
+                "failure_mode": "non_approved_source",
+                "source": q.source,
+                "age_seconds": q.age_seconds,
+                "approved": sorted(APPROVED_SOURCES),
+            },
+            legacy_status="market_data_integrity",
+        )
+
+    if age > MAX_AGE_SEC:
+        return BlockingFactor(
+            category="data_quality", rule="market_data_integrity",
+            severity="hard",
+            reason=(
+                f"last tick age {age:.0f}s exceeds max {MAX_AGE_SEC:.0f}s "
+                f"— feed is stale, refusing to act"
+            ),
+            evidence={
+                "failure_mode": "stale_age",
+                "source": q.source,
+                "age_seconds": age,
+                "max_age_seconds": MAX_AGE_SEC,
+            },
+            legacy_status="market_data_integrity",
+        )
+
+    # Cross-check the engine's snapshot price against the fresh quote.
+    # The engine writes `data["price"]` during the cycle; if it diverges
+    # from the live tape by > MAX_PRICE_DRIFT_PCT we refuse.
+    snap_price = float(ctx.data.get("price") or 0.0)
+    if snap_price > 0 and q.price > 0:
+        drift_pct = abs(snap_price - q.price) / q.price * 100.0
+        if drift_pct > MAX_PRICE_DRIFT_PCT:
+            return BlockingFactor(
+                category="data_quality", rule="market_data_integrity",
+                severity="hard",
+                reason=(
+                    f"engine snapshot ${snap_price:.2f} differs from "
+                    f"live tape ${q.price:.2f} by {drift_pct:.2f}% — "
+                    f"refusing (max {MAX_PRICE_DRIFT_PCT}%)"
+                ),
+                evidence={
+                    "failure_mode": "price_divergence",
+                    "snapshot_price": snap_price,
+                    "live_price": q.price,
+                    "drift_pct": round(drift_pct, 4),
+                    "max_drift_pct": MAX_PRICE_DRIFT_PCT,
+                    "source": q.source,
+                    "age_seconds": age,
+                },
+                legacy_status="market_data_integrity",
+            )
+
+    return None
+
+
 def rule_naked_short_block(
     ctx: PolicyContext,
 ) -> Optional[BlockingFactor]:
@@ -1652,6 +1756,14 @@ def _register_all(policy: DecisionPolicy) -> None:
     policy.register(PolicyRule(
         "portfolio_context_failed", "data_quality", "hard",
         rule_portfolio_context_failed,
+    ))
+    # 2026-06-15 — market_data_integrity registered BEFORE naked_short
+    # so a stale-feed cycle never reaches collateral/risk checks. This
+    # is the gate the operator demanded after catching the UI label
+    # "LIVE $741" on Friday-close yfinance data.
+    policy.register(PolicyRule(
+        "market_data_integrity", "data_quality", "hard",
+        rule_market_data_integrity,
     ))
     # Fix N=4 — naked-short refusal + covered-call shares check + CSP
     # cash collateral. Registered BEFORE correlation_cap_block so the
