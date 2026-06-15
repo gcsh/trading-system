@@ -230,6 +230,16 @@ export default function DrawingLayer({
         style.label = `$${Number(s.points[0].price).toFixed(2)}`;
       }
       tool.draw(ctx, px, style, view);
+      // D.4 — small lock badge at the topmost point of locked shapes.
+      if (s.locked && px[0]) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(95, 201, 206, 0.85)';
+        ctx.font = '10px var(--font-mono, monospace)';
+        ctx.textBaseline = 'bottom';
+        ctx.textAlign = 'left';
+        ctx.fillText('🔒', px[0].x + 6, px[0].y - 2);
+        ctx.restore();
+      }
       if (selectedId && s.id === selectedId) {
         ctx.save();
         ctx.lineWidth = 1.5;
@@ -490,9 +500,10 @@ export default function DrawingLayer({
 
       // (1) Handle of the currently-selected shape — priority hit so
       //     an endpoint overlapping other lines is still grabbable.
+      //     D.4 — locked shapes are non-interactive (read-only).
       if (curSel) {
         const s = currentShapes.find((sh) => sh.id === curSel);
-        if (s) {
+        if (s && !s.locked) {
           const px = shapeToPixels(s, chartRefs.chart, chartRefs.candleSeries);
           if (px) {
             for (let i = 0; i < px.length; i += 1) {
@@ -518,9 +529,12 @@ export default function DrawingLayer({
         }
       }
 
-      // (2) Any shape body — newest first so topmost wins.
+      // (2) Any shape body — newest first so topmost wins. D.4 —
+      //     locked shapes are skipped so the chart underneath can be
+      //     panned even when they cover a wide region.
       for (let i = currentShapes.length - 1; i >= 0; i -= 1) {
         const s = currentShapes[i];
+        if (s.locked) continue;
         const def = DRAWING_TOOLS[s.tool];
         if (!def) continue;
         const px = shapeToPixels(s, chartRefs.chart, chartRefs.candleSeries);

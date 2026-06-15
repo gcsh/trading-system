@@ -908,6 +908,13 @@ export default function StockAnalysis() {
   // (trendline, horizontal, fib, rect, text) are wired through the
   // DrawingLayer canvas overlay; extended inventory queues for D.3.3+.
   const [drawingTool, setDrawingTool] = useState('cursor');
+  // D.4 / D.3.5 — read-only backend pattern overlays. When OFF, the
+  // detector observation arrows are suppressed from the chart so the
+  // operator gets a clean candles-only view; Cmd+K toggles it.
+  // Full zone/rectangle overlays for FVG/SMC/Wyckoff need a richer
+  // backend payload (top/bottom price, start/end time per observation)
+  // and ship as a separate backend extension.
+  const [detectorOverlaysOn, setDetectorOverlaysOn] = useState(true);
   // Phase D.3.1 — chart instance handed up by TheoryChart's onReady so
   // the DrawingLayer can talk to the price/time scale.
   const [chartRefs, setChartRefs] = useState(null);
@@ -922,6 +929,7 @@ export default function StockAnalysis() {
     updateShape: updateDrawing,
     duplicateShape: duplicateDrawing,
     clearShapes: clearDrawings,
+    lockAll: lockAllDrawings,
     undo: undoDrawing,
     redo: redoDrawing,
   } = useDrawings(ticker);
@@ -1021,8 +1029,12 @@ export default function StockAnalysis() {
   // tens of thousands of points re-uploaded — which is why "draw a
   // line, wait a minute, line appears".
   const visibleObs = useMemo(() => (
-    (data?.observations || []).filter((o) => !hiddenOverlays[o.family])
-  ), [data?.observations, hiddenOverlays]);
+    // D.3.5 — `detectorOverlaysOn=false` hides every backend pattern
+    // arrow; `hiddenOverlays[family]` continues to hide per-family.
+    !detectorOverlaysOn
+      ? []
+      : (data?.observations || []).filter((o) => !hiddenOverlays[o.family])
+  ), [data?.observations, hiddenOverlays, detectorOverlaysOn]);
 
   const visibleFams = useMemo(() => Array.from(new Set(
     visibleObs.map((o) => o.family).filter(Boolean),
@@ -1518,6 +1530,31 @@ export default function StockAnalysis() {
                 // eslint-disable-next-line no-alert
                 globalThis.alert(`Export failed: ${e && e.message}`);
               }
+              setCmdOpen(false);
+            },
+          },
+          {
+            id: 'drawings-lock-all',
+            label: drawings.some((s) => s.locked)
+              ? 'Drawings · Unlock all'
+              : 'Drawings · Lock all',
+            color: '#ffd166',
+            hint: `${drawings.length}`,
+            onPick: () => {
+              const anyLocked = drawings.some((s) => s.locked);
+              lockAllDrawings(!anyLocked);
+              setCmdOpen(false);
+            },
+          },
+          {
+            id: 'patterns-toggle',
+            label: detectorOverlaysOn
+              ? 'Patterns · Hide backend overlays'
+              : 'Patterns · Show backend overlays',
+            color: '#a78bfa',
+            hint: detectorOverlaysOn ? 'on' : 'off',
+            onPick: () => {
+              setDetectorOverlaysOn((v) => !v);
               setCmdOpen(false);
             },
           },

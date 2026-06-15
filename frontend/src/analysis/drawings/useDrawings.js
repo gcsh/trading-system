@@ -132,6 +132,15 @@ export default function useDrawings(ticker) {
     setSelectedId(null);
   }, [commit]);
 
+  // D.4 — set/unset the `locked` flag on every shape. Locked shapes
+  // still render but can't be selected, dragged, deleted, or
+  // right-clicked. Cmd+K exposes this via "Lock all" / "Unlock all".
+  const lockAll = useCallback((locked) => {
+    const next = shapesRef.current.map((s) => ({ ...s, locked: !!locked }));
+    commit(next);
+    if (locked) setSelectedId(null);
+  }, [commit]);
+
   const undo = useCallback(() => {
     if (pastRef.current.length === 0) return;
     const prev = pastRef.current.pop();
@@ -159,6 +168,7 @@ export default function useDrawings(ticker) {
     updateShape,
     duplicateShape,
     clearShapes,
+    lockAll,
     undo,
     redo,
     canUndo: pastRef.current.length > 0,
