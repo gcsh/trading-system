@@ -29,7 +29,6 @@ import IntervalSelector from '../components/IntervalSelector.jsx';
 import useChartTimeframe from '../hooks/useChartTimeframe.js';
 import useChartInterval from '../hooks/useChartInterval.js';
 import useAnalysisBars from '../hooks/swr/useAnalysisBars.js';
-import { pickLiveBadge } from '../lib/liveBadge.js';
 import useTheoryOverlays from '../hooks/swr/useTheoryOverlays.js';
 import { useLivePrice } from '../lib/useLivePrice.js';
 import { THEORY_CATALOG, THEORY_BY_ID, migrateTheoryIds, LONG_WINDOW_THEORIES }
@@ -1086,38 +1085,29 @@ export default function StockAnalysis() {
               correct backend window + client trim via useChartTimeframe. */}
           <TimeframeSelector value={timeframe} onChange={setTimeframe} />
           <IntervalSelector value={interval} onChange={setInterval} />
-          {liveTick && liveTick.price && (() => {
-            const badge = pickLiveBadge(liveTick);
-            const palette = {
-              success: { fg: '#26d07c', bg: 'rgba(38,208,124,0.14)', bd: 'rgba(38,208,124,0.35)' },
-              warning: { fg: '#ffd166', bg: 'rgba(255,209,102,0.14)', bd: 'rgba(255,209,102,0.45)' },
-              danger:  { fg: '#e8606e', bg: 'rgba(232,96,110,0.14)', bd: 'rgba(232,96,110,0.45)' },
-              muted:   { fg: '#9aa5b2', bg: 'rgba(154,165,178,0.12)', bd: 'rgba(154,165,178,0.30)' },
-            }[badge.tone] || { fg: '#9aa5b2', bg: 'rgba(154,165,178,0.12)', bd: 'rgba(154,165,178,0.30)' };
-            return (
-              <span
-                data-testid="analysis-live-pill"
-                title={badge.title}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  padding: '2px 7px',
-                  background: palette.bg,
-                  color: palette.fg,
-                  fontSize: 10, fontWeight: 700,
-                  letterSpacing: '0.04em',
-                  textTransform: 'uppercase',
-                  borderRadius: 999,
-                  border: `1px solid ${palette.bd}`,
-                }}
-              >
-                <span style={{
-                  width: 6, height: 6, borderRadius: '50%',
-                  background: palette.fg,
-                }} />
-                {badge.label}
-              </span>
-            );
-          })()}
+          {liveTick && liveTick.price && (
+            <span
+              data-testid="analysis-live-pill"
+              title={`Live: $${Number(liveTick.price).toFixed(2)}  source=${liveTick.source || ''}`}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                padding: '2px 7px',
+                background: 'rgba(38, 208, 124, 0.14)',
+                color: '#26d07c',
+                fontSize: 10, fontWeight: 700,
+                letterSpacing: '0.04em',
+                textTransform: 'uppercase',
+                borderRadius: 999,
+                border: '1px solid rgba(38, 208, 124, 0.35)',
+              }}
+            >
+              <span style={{
+                width: 6, height: 6, borderRadius: '50%',
+                background: '#26d07c',
+              }} />
+              Live ${Number(liveTick.price).toFixed(2)}
+            </span>
+          )}
           {/* Phase C.4 — Cmd-K palette opener. Visible affordance so
               new operators discover the keyboard shortcut. */}
           <button
