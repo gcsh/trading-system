@@ -1351,6 +1351,7 @@ export default function StockAnalysis() {
                           duplicateShape={duplicateDrawing}
                           undo={undoDrawing}
                           redo={redoDrawing}
+                          bars={barsForChart}
                         />
                         {drawings.length > 0 && (
                           <button
@@ -1394,6 +1395,40 @@ export default function StockAnalysis() {
                   AI summary · {ticker}
                 </div>
                 {data.summary}
+              </div>
+            )}
+            {/* D.4 — surface backend notes array beneath chart.
+                  Engine returns terse one-liners like "Pivots: floor pivots
+                  from 2026-06-13" which were previously hidden. */}
+            {Array.isArray(data.notes) && data.notes.length > 0 && (
+              <div className="panel" style={{
+                marginTop: 10, padding: 10, fontSize: 12,
+                display: 'flex', flexDirection: 'column', gap: 4,
+              }}>
+                <div style={{
+                  fontSize: 10, letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  color: 'var(--muted)', marginBottom: 2,
+                }}>
+                  Engine notes · {ticker}
+                </div>
+                {data.notes.slice(0, 12).map((n, i) => (
+                  <div key={i} style={{
+                    color: 'var(--text-primary, #e6edf3)',
+                    lineHeight: 1.4,
+                  }}>
+                    <span style={{
+                      color: 'var(--accent, #5fc9ce)',
+                      marginRight: 6,
+                    }}>›</span>
+                    {String(n)}
+                  </div>
+                ))}
+                {data.notes.length > 12 && (
+                  <div style={{ color: 'var(--muted)', fontSize: 11 }}>
+                    +{data.notes.length - 12} more
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1448,6 +1483,88 @@ export default function StockAnalysis() {
             label: 'Clear all chart overlays',
             color: '#e8606e',
             onPick: () => { setSelectedTheories([]); setCmdOpen(false); },
+          },
+          // D.4 — Drawings group.
+          {
+            id: 'drawings-clear',
+            label: 'Drawings · Clear all on this ticker',
+            color: '#e8606e',
+            hint: `${drawings.length}`,
+            onPick: () => { clearDrawings(); setCmdOpen(false); },
+          },
+          {
+            id: 'drawings-export',
+            label: 'Drawings · Export JSON',
+            color: '#5fc9ce',
+            hint: `${drawings.length}`,
+            onPick: () => {
+              try {
+                const payload = JSON.stringify({
+                  version: 1,
+                  ticker,
+                  exported_at: new Date().toISOString(),
+                  shapes: drawings,
+                }, null, 2);
+                const blob = new Blob([payload], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `drawings-${ticker}-${Date.now()}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+              } catch (e) {
+                // eslint-disable-next-line no-alert
+                globalThis.alert(`Export failed: ${e && e.message}`);
+              }
+              setCmdOpen(false);
+            },
+          },
+          {
+            id: 'drawings-import',
+            label: 'Drawings · Import JSON (merge into this ticker)',
+            color: '#5fc9ce',
+            onPick: () => {
+              setCmdOpen(false);
+              const input = document.createElement('input');
+              input.type = 'file';
+              input.accept = 'application/json,.json';
+              input.onchange = (ev) => {
+                const file = ev.target.files && ev.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = () => {
+                  try {
+                    const parsed = JSON.parse(String(reader.result));
+                    const shapes = Array.isArray(parsed)
+                      ? parsed
+                      : (parsed && Array.isArray(parsed.shapes)
+                          ? parsed.shapes : null);
+                    if (!shapes) throw new Error('no shapes array in file');
+                    let added = 0;
+                    for (const s of shapes) {
+                      if (!s || !s.tool || !Array.isArray(s.points)) continue;
+                      const ok = s.points.every(
+                        (p) => p && Number.isFinite(p.time)
+                          && Number.isFinite(p.price));
+                      if (!ok) continue;
+                      addDrawing({
+                        tool: s.tool, points: s.points, style: s.style || {},
+                      });
+                      added += 1;
+                    }
+                    // eslint-disable-next-line no-alert
+                    globalThis.alert(`Imported ${added} shape${added === 1 ? '' : 's'} to ${ticker}.`);
+                  } catch (e) {
+                    // eslint-disable-next-line no-alert
+                    globalThis.alert(`Import failed: ${e && e.message}`);
+                  }
+                };
+                reader.readAsText(file);
+              };
+              input.click();
+            },
           },
         ]}
       />

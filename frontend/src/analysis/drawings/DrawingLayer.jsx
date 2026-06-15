@@ -48,6 +48,7 @@ const WIRED_TOOLS = new Set([
 const HANDLE_PAINT = 5;   // visible radius
 const HANDLE_HIT = 12;    // hit radius (loose, easy to grab)
 const DRAG_THRESHOLD = 3; // px of motion before we treat it as a drag
+const SNAP_PX = 10;       // D.4 magnet-snap pixel threshold (OHLC)
 
 const SWATCHES = ['#5fc9ce', '#ffd166', '#e8606e', '#a78bfa', '#e6edf3'];
 
@@ -89,6 +90,58 @@ function shapeToPixels(shape, chart, candleSeries) {
   return out;
 }
 
+// D.4 — magnet-snap to the nearest candle's High / Low / Close.
+//
+// Given a hover pixel and the OHLC bar series, find the bar with the
+// closest x coordinate and check if any of its H/L/C lies within
+// SNAP_PX of the cursor in screen space. Returns the snapped data
+// point + a label ('H'/'L'/'C') for the UI, or null if no snap.
+function snapToOHLC(cursorPx, bars, chart, candleSeries) {
+  if (!bars || !bars.length || !cursorPx) return null;
+  const ts = chart.timeScale();
+
+  // Find the bar whose x is closest to cursor.x. Bars are dense, so
+  // a linear-scan binary-search is fine for typical 1000-bar windows.
+  let bestBar = null;
+  let bestDx = Infinity;
+  for (const b of bars) {
+    const bx = ts.timeToCoordinate(b.time);
+    if (bx == null) continue;
+    const dx = Math.abs(bx - cursorPx.x);
+    if (dx < bestDx) {
+      bestDx = dx;
+      bestBar = { bar: b, x: bx };
+    }
+    if (bx > cursorPx.x + 40) break;   // bars are sorted; bail early
+  }
+  if (!bestBar) return null;
+
+  const candidates = [
+    { label: 'H', value: bestBar.bar.high },
+    { label: 'L', value: bestBar.bar.low },
+    { label: 'C', value: bestBar.bar.close },
+  ];
+  let bestSnap = null;
+  let bestDist = SNAP_PX;
+  for (const c of candidates) {
+    if (c.value == null) continue;
+    const y = candleSeries.priceToCoordinate(c.value);
+    if (y == null) continue;
+    const dist = Math.hypot(bestBar.x - cursorPx.x, y - cursorPx.y);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestSnap = {
+        x: bestBar.x,
+        y,
+        time: bestBar.bar.time,
+        price: c.value,
+        label: c.label,
+      };
+    }
+  }
+  return bestSnap;
+}
+
 export default function DrawingLayer({
   chartRefs,
   activeTool,
@@ -102,12 +155,17 @@ export default function DrawingLayer({
   duplicateShape,
   undo,
   redo,
+  bars,         // D.4 — OHLC array for magnet-snap
 }) {
   const canvasRef = useRef(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [collecting, setCollecting] = useState(null);
   const [hoverPx, setHoverPx] = useState(null);
+  const [snapPx, setSnapPx] = useState(null);
   const [chipPos, setChipPos] = useState(null);
+
+  const barsRef = useRef(bars);
+  barsRef.current = bars;
 
   // Refs so the long-lived container listeners don't have to re-attach
   // every render.
@@ -194,7 +252,14 @@ export default function DrawingLayer({
       }
     }
 
-    if (collecting && collecting.tool && hoverPx) {
+    // D.4 — if magnet-snap is active, use the snapped pixel for the
+    // rubber-band preview so the operator sees where the click will
+    // land.
+    const cursorPx = snapPx
+      ? { x: snapPx.x, y: snapPx.y }
+      : hoverPx;
+
+    if (collecting && collecting.tool && cursorPx) {
       const tool = DRAWING_TOOLS[collecting.tool];
       if (tool) {
         const previewPoints = [];
@@ -203,14 +268,36 @@ export default function DrawingLayer({
           const y = chartRefs.candleSeries.priceToCoordinate(p.price);
           if (x != null && y != null) previewPoints.push({ x, y });
         }
-        previewPoints.push(hoverPx);
+        previewPoints.push(cursorPx);
         const style = { ...DEFAULT_STYLE, color: '#ffd166' };
         if (collecting.tool === 'horizontal') {
-          const price = chartRefs.candleSeries.coordinateToPrice(hoverPx.y);
+          const price = chartRefs.candleSeries.coordinateToPrice(cursorPx.y);
           if (price != null) style.label = `$${Number(price).toFixed(2)}`;
         }
         tool.draw(ctx, previewPoints, style, view);
       }
+    }
+
+    // D.4 — paint the snap indicator on top: filled cyan dot + tiny
+    // H/L/C label so the operator knows what they're snapping to.
+    if (snapPx) {
+      ctx.save();
+      ctx.fillStyle = '#5fc9ce';
+      ctx.strokeStyle = '#0d111f';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(snapPx.x, snapPx.y, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.font = '10px var(--font-mono, monospace)';
+      ctx.fillStyle = '#5fc9ce';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(
+        `${snapPx.label} $${Number(snapPx.price).toFixed(2)}`,
+        snapPx.x + 8, snapPx.y - 6,
+      );
+      ctx.restore();
     }
 
     if (chipAnchor) {
@@ -226,7 +313,7 @@ export default function DrawingLayer({
       chipPosRef.current = null;
       setChipPos(null);
     }
-  }, [shapes, collecting, hoverPx, chartRefs, ready, selectedId]);
+  }, [shapes, collecting, hoverPx, snapPx, chartRefs, ready, selectedId]);
 
   // Repaint on scale change (pan/zoom) and on resize.
   useEffect(() => {
@@ -346,8 +433,16 @@ export default function DrawingLayer({
         e.stopPropagation();
         e.preventDefault();
         const ts = chartRefs.chart.timeScale();
-        const rawTime = ts.coordinateToTime(x);
-        const price = chartRefs.candleSeries.coordinateToPrice(y);
+        // D.4 — if the cursor is within SNAP_PX of a candle's H/L/C,
+        // use that exact value instead of the free-pixel readout.
+        const snap = snapToOHLC(
+          { x, y }, barsRef.current,
+          chartRefs.chart, chartRefs.candleSeries,
+        );
+        const rawTime = snap ? snap.time : ts.coordinateToTime(x);
+        const price = snap
+          ? snap.price
+          : chartRefs.candleSeries.coordinateToPrice(y);
         if (rawTime == null || price == null) return;
         const time = timeToUnix(rawTime);
         if (!Number.isFinite(time) || time <= 0) return;
@@ -466,9 +561,17 @@ export default function DrawingLayer({
       // Only update hoverPx when a wired tool is active so paint
       // doesn't churn during pure pan/zoom.
       if (WIRED_TOOLS.has(tool)) {
-        setHoverPx({ x: e.clientX - r.left, y: e.clientY - r.top });
-      } else if (hoverPx) {
-        setHoverPx(null);
+        const px = { x: e.clientX - r.left, y: e.clientY - r.top };
+        setHoverPx(px);
+        // D.4 — magnet snap indicator + price replacement.
+        const snap = snapToOHLC(
+          px, barsRef.current,
+          chartRefs.chart, chartRefs.candleSeries,
+        );
+        setSnapPx(snap);
+      } else {
+        if (hoverPx) setHoverPx(null);
+        if (snapPx) setSnapPx(null);
       }
     };
 
