@@ -143,7 +143,12 @@ export default function Layout() {
 
   useEffect(() => {
     refresh();
-    const id = setInterval(refresh, 4000);
+    // 2026-06-15 — was 4s, which made the topbar flicker every few seconds
+    // and re-fetched /config + /bot/status + /portfolio/performance + equity
+    // + paper-state on every tick. Operator reported visible noise. 15s is
+    // still well within "feels live" for a paper-trading dashboard and cuts
+    // request volume ~4×.
+    const id = setInterval(refresh, 15000);
     return () => clearInterval(id);
   }, [refresh]);
 

@@ -973,20 +973,29 @@ def rule_market_data_integrity(
     """2026-06-15 — refuse trades when the live quote can't be trusted.
 
     Catches three failure modes:
-      * `quote.source` not in the approved live-feed whitelist
+      * `quote.source` not in the approved live-feed whitelist — HARD
         (anything ending in ``_stale`` / ``_previous`` is rejected —
         these are yfinance fallbacks from `quote_source.get_quote`)
-      * `quote.age_seconds` > 30s — the print is too old to act on
+      * `quote.age_seconds` > MAX_AGE_SEC — feed is stale, HARD block
       * Engine-computed snapshot price diverges from the live quote by
-        more than 0.5% — the two layers disagree, refuse to size
+        more than MAX_PRICE_DRIFT_PCT — two layers disagree, HARD
 
     This is the gate that would have blocked Monday-open trading on
     stale weekend yfinance data. Lives ahead of `rule_naked_short_block`
     so a bad-feed cycle never gets near sizing or collateral checks.
+
+    2026-06-15 calibration update: original 30s age + 0.5% drift was
+    blocking 7,932 of ~10,000 evals during normal market hours because
+    the engine cycle takes 60-240s (brain timeouts compounding), so the
+    quote used for sizing is naturally 1-4 min older than the integrity
+    re-check. Raised age threshold to 300s (catches the 58-hour
+    yfinance regression we built this for, still blocks anything truly
+    stale) and drift to 2% (the original 0.5% was tighter than typical
+    minute-bar slip).
     """
     APPROVED_SOURCES = {"alpaca", "thetadata"}
-    MAX_AGE_SEC = 30.0
-    MAX_PRICE_DRIFT_PCT = 0.5   # 0.5% — generous for stocks
+    MAX_AGE_SEC = 300.0
+    MAX_PRICE_DRIFT_PCT = 2.0
 
     # Fetch fresh quote and compare with the snapshot price the engine
     # already has (signal.metadata snapshot.price OR data.price).

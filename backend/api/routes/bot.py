@@ -1,13 +1,52 @@
-"""Bot lifecycle endpoints: start, stop, status."""
+"""Bot lifecycle endpoints: start, stop, status.
+
+2026-06-15 — Tier-3 architecture handling. The engine runs in a separate
+systemd unit (`trading-engine.service` on :8099). The API process runs
+with ``TB_API_ONLY=1`` and has no engine loop, so its in-process
+``app.state.engine`` reports ``running=False, cycles=0`` — which made
+the UI status badge wrong and the Start button a no-op.
+
+In API-only mode, ``/bot/status``, ``/bot/start``, ``/bot/stop`` and
+``/bot/run-cycle`` proxy through to the engine on :8099. The engine
+itself doesn't go through this branch — it runs its own
+``app.state.engine`` natively and answers directly.
+"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+import logging
+import os
+from typing import Any
+
+import httpx
+from fastapi import APIRouter, HTTPException, Request
 
 router = APIRouter(prefix="/bot", tags=["bot"])
+
+_log = logging.getLogger(__name__)
+
+_ENGINE_BASE = os.getenv("TB_ENGINE_URL", "http://127.0.0.1:8099")
+_API_ONLY = os.getenv("TB_API_ONLY", "0") == "1"
+
+
+async def _engine_proxy(method: str, path: str, **kwargs: Any) -> dict:
+    """Forward a request to the engine process. Used only in API-only
+    mode so the UI sees the real loop state instead of the empty
+    in-process stub."""
+    url = f"{_ENGINE_BASE}{path}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.request(method, url, **kwargs)
+            r.raise_for_status()
+            return r.json()
+    except httpx.HTTPError as exc:
+        _log.warning("engine proxy %s %s failed: %s", method, path, exc)
+        raise HTTPException(status_code=502, detail=f"engine unreachable: {exc}") from exc
 
 
 @router.post("/start")
 async def start(request: Request) -> dict:
+    if _API_ONLY:
+        return await _engine_proxy("POST", "/bot/start")
     engine = request.app.state.engine
     # Rebuild executor in case the user changed the broker in the UI.
     from backend.db import session_scope
@@ -29,6 +68,8 @@ async def start(request: Request) -> dict:
 
 @router.post("/stop")
 async def stop(request: Request) -> dict:
+    if _API_ONLY:
+        return await _engine_proxy("POST", "/bot/stop")
     engine = request.app.state.engine
     engine.stop()
     return {"running": engine.status.running}
@@ -36,6 +77,8 @@ async def stop(request: Request) -> dict:
 
 @router.get("/status")
 async def status(request: Request) -> dict:
+    if _API_ONLY:
+        return await _engine_proxy("GET", "/bot/status")
     engine = request.app.state.engine
     # Issue 11c — daily_pnl was the engine's in-memory cycle counter (resets
     # to 0 on every restart and never matched the dashboard tile). Use the
@@ -69,6 +112,8 @@ async def status(request: Request) -> dict:
 @router.post("/run-cycle")
 async def run_cycle(request: Request) -> dict:
     """Manual one-shot trigger for the engine loop. Useful for debugging."""
+    if _API_ONLY:
+        return await _engine_proxy("POST", "/bot/run-cycle")
     engine = request.app.state.engine
     events = engine.run_cycle()
     return {"events": events}
@@ -84,6 +129,11 @@ async def force_trade(request: Request, payload: dict | None = None) -> dict:
     forcing at least one paper order through. Risk-manager checks still apply
     (buying power, daily loss, max positions).
     """
+    if _API_ONLY:
+        return await _engine_proxy(
+            "POST", "/bot/force-trade",
+            json=(payload or {}),
+        )
     from backend.bot.risk import AccountState, RiskManager
     from backend.bot.strategies.all_strategies import STRATEGY_REGISTRY
     from backend.bot.strategies.base import Action

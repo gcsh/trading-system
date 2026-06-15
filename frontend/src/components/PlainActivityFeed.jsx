@@ -100,7 +100,9 @@ export default function PlainActivityFeed() {
 
   useEffect(() => {
     load();
-    const id = setInterval(load, 5000);
+    // 2026-06-15 — bumped from 5s → 15s. Engine cycles are ~30-60s
+    // anyway; polling 3× faster than that just churned the UI.
+    const id = setInterval(load, 15000);
     return () => clearInterval(id);
   }, [load]);
 
