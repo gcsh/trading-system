@@ -123,21 +123,28 @@ export default function Layout() {
   const location = useLocation();
 
   const refresh = useCallback(async () => {
-    try {
-      const [c, s, p, eq, ps] = await Promise.all([
-        api('/config'),
-        api('/bot/status'),
-        api('/portfolio/performance'),
-        api('/portfolio/equity?limit=240'),
-        api('/paper/state').catch(() => null),
-      ]);
-      setConfig(c);
-      setStatus(s);
-      setPerformance(p);
-      setEquity(eq);
-      setPaperState(ps);
-    } catch (e) {
-      console.warn('refresh failed', e);
+    // 2026-06-15 — allSettled instead of all. Previously a single 502
+    // from /bot/status (engine mid-brain-call) rejected the whole
+    // Promise and the page sat on "Loading…" forever. Each endpoint
+    // now updates independently.
+    const [c, s, p, eq, ps] = await Promise.allSettled([
+      api('/config'),
+      api('/bot/status'),
+      api('/portfolio/performance'),
+      api('/portfolio/equity?limit=240'),
+      api('/paper/state'),
+    ]);
+    if (c.status === 'fulfilled') setConfig(c.value);
+    if (s.status === 'fulfilled') setStatus(s.value);
+    if (p.status === 'fulfilled') setPerformance(p.value);
+    if (eq.status === 'fulfilled') setEquity(eq.value);
+    if (ps.status === 'fulfilled') setPaperState(ps.value);
+    // Log failures for visibility without blocking the UI.
+    for (const r of [c, s, p, eq, ps]) {
+      if (r.status === 'rejected') {
+        // eslint-disable-next-line no-console
+        console.warn('refresh: one endpoint failed:', r.reason);
+      }
     }
   }, []);
 

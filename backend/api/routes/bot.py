@@ -28,18 +28,49 @@ _ENGINE_BASE = os.getenv("TB_ENGINE_URL", "http://127.0.0.1:8099")
 _API_ONLY = os.getenv("TB_API_ONLY", "0") == "1"
 
 
-async def _engine_proxy(method: str, path: str, **kwargs: Any) -> dict:
+async def _engine_proxy(
+    method: str, path: str, *, graceful: bool = False, **kwargs: Any,
+) -> dict:
     """Forward a request to the engine process. Used only in API-only
     mode so the UI sees the real loop state instead of the empty
-    in-process stub."""
+    in-process stub.
+
+    2026-06-15 — When ``graceful=True``, a proxy failure (typically the
+    engine's single uvicorn worker is blocked inside an Anthropic SDK
+    retry loop and can't answer HTTP for ~30-60s) returns a 200 with
+    ``engine_unreachable: true`` instead of a 502. Without this the
+    frontend's ``Promise.all`` in Layout.jsx rejects on every
+    status-poll while the engine is mid-cycle and the entire page
+    sits forever on "Loading…".
+    """
     url = f"{_ENGINE_BASE}{path}"
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        # 3s timeout — engine is either responsive immediately or it's
+        # blocked inside a slow brain call; no value in waiting longer.
+        async with httpx.AsyncClient(timeout=3.0) as client:
             r = await client.request(method, url, **kwargs)
             r.raise_for_status()
             return r.json()
     except httpx.HTTPError as exc:
         _log.warning("engine proxy %s %s failed: %s", method, path, exc)
+        if graceful:
+            return {
+                "engine_unreachable": True,
+                "reason": str(exc)[:200] or type(exc).__name__,
+                # Shape-compat fallbacks so the UI's BotHealthChip + Layout
+                # don't crash on null reads.
+                "running": False,
+                "strategy": "ai_brain",
+                "market_regime": None,
+                "intraday_regime": "normal",
+                "day_plan": None,
+                "daily_pnl": 0.0,
+                "cycles": None,
+                "last_cycle_at": None,
+                "recent_signals": [],
+                "broker": None,
+                "live_loop_running": False,
+            }
         raise HTTPException(status_code=502, detail=f"engine unreachable: {exc}") from exc
 
 
@@ -78,7 +109,11 @@ async def stop(request: Request) -> dict:
 @router.get("/status")
 async def status(request: Request) -> dict:
     if _API_ONLY:
-        return await _engine_proxy("GET", "/bot/status")
+        # graceful=True — status is polled every 15s by the topbar. If
+        # the engine is blocked inside a brain call, returning 502 would
+        # break the Layout's Promise.all and freeze the whole page on
+        # "Loading…". Return a degraded-but-shaped payload instead.
+        return await _engine_proxy("GET", "/bot/status", graceful=True)
     engine = request.app.state.engine
     # Issue 11c — daily_pnl was the engine's in-memory cycle counter (resets
     # to 0 on every restart and never matched the dashboard tile). Use the
