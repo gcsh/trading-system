@@ -81,11 +81,31 @@ def _thetadata_quote(ticker: str) -> Optional[Quote]:
             if not ts_str:
                 return None
             try:
-                # ThetaData emits naive timestamps in UTC (per their
-                # docs); parse + tag UTC so the math is right.
+                # 2026-06-15 — FIX: ThetaData publishes timestamps in
+                # America/New_York (ET) — NOT UTC, despite the missing
+                # offset. See thetadata.py:732 (`_now_et`) where the rest
+                # of the codebase already knows this. The previous
+                # version of this helper tagged the naive ts as UTC,
+                # which made every quote during market hours appear 4
+                # hours stale (EDT) — every signal got hard-blocked by
+                # rule_market_data_integrity at the policy layer. Net
+                # effect today: 0 trades, ~10k market_data_integrity
+                # rejections per cycle.
+                #
+                # If the publisher ever flips to ISO with a Z/offset
+                # we'll honour that; otherwise treat naive as ET.
                 ts = _dt.fromisoformat(ts_str.replace("Z", "+00:00"))
                 if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=_tz.utc)
+                    try:
+                        from zoneinfo import ZoneInfo
+                        ts = ts.replace(tzinfo=ZoneInfo("America/New_York"))
+                    except Exception:
+                        # zoneinfo unavailable — fall back to fixed -4h
+                        # (EDT). Off by 1h in EST winter, but that's a
+                        # small DST gap, not the 4-hour cliff we just
+                        # found.
+                        from datetime import timedelta as _td
+                        ts = (ts - _td(hours=4)).replace(tzinfo=_tz.utc)
                 now = _dt.now(_tz.utc)
                 return max(0.0, (now - ts).total_seconds())
             except Exception:
