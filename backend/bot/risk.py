@@ -21,6 +21,9 @@ class AccountState:
     portfolio_value: float
     open_positions: int
     daily_pnl: float = 0.0
+    # Cash on hand — distinct from buying_power on margin accounts.
+    # Read by `rule_naked_short_block` for SELL_CSP collateral check.
+    cash: float = 0.0
 
 
 class RiskManager:

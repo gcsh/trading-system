@@ -99,6 +99,24 @@ class SignalBlender:
         action, confidence, scores = _weighted_action(signals)
         components["scores"] = scores
 
+        # When the winning action is the rule's, preserve the rule signal
+        # whole — strike, dte, stop_loss, take_profit, original metadata.
+        # Dropping these turned every CSP into "needs $0.00 cash; have
+        # $0.00" because risk reads signal.strike directly.
+        if action == rule_signal.action:
+            merged_metadata = dict(rule_signal.metadata or {})
+            merged_metadata["ai_components"] = components
+            rule_signal.metadata = merged_metadata
+            rule_signal.confidence = confidence
+            return rule_signal
+
+        # Claude (or ML) overrode the action. Carry the winning input's
+        # strike/dte/exit levels — falls back to the rule's where the
+        # override didn't compute them (e.g. Claude says BUY_STOCK but
+        # rule had a CSP strike, which doesn't apply).
+        override_source = next(
+            (s for s, _w in signals if s.action == action), rule_signal,
+        )
         final_strategy = rule_signal.strategy or "blended"
         return Signal(
             ticker=ticker,
@@ -106,7 +124,12 @@ class SignalBlender:
             confidence=confidence,
             reason=f"blended: {scores}",
             strategy=final_strategy,
+            stop_loss=override_source.stop_loss,
+            take_profit=override_source.take_profit,
+            strike=override_source.strike,
+            dte=override_source.dte,
             metadata={
+                **(override_source.metadata or {}),
                 "ai_components": components,
                 "source": "ai_blender",
             },

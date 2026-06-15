@@ -3315,6 +3315,9 @@ class BotEngine:
             portfolio_value=account_dict.get("portfolio_value", 0.0),
             open_positions=account_dict.get("open_positions", 0),
             daily_pnl=self.status.daily_pnl,
+            cash=account_dict.get(
+                "cash", account_dict.get("buying_power", 0.0),
+            ),
         )
 
         auto_execute = bool(config.get("auto_execute", False))
@@ -3334,6 +3337,9 @@ class BotEngine:
             account.buying_power = account_dict.get("buying_power", 0.0)
             account.portfolio_value = account_dict.get("portfolio_value", 0.0)
             account.open_positions = account_dict.get("open_positions", 0)
+            account.cash = account_dict.get(
+                "cash", account_dict.get("buying_power", 0.0),
+            )
 
         held = self._held_tickers()
         held_option_keys = self._held_option_keys()

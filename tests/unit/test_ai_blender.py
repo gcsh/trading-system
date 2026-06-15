@@ -145,3 +145,60 @@ def test_blender_holds_when_all_sources_hold():
         ai_config={"claude_enabled": False, "ml_enabled": True, "ml_weight": 0.5},
     )
     assert out.action == Action.HOLD
+
+
+def test_blender_preserves_rule_strike_when_action_unchanged():
+    """Regression: 2026-06-15 — when Claude errors out (or any source
+    returns HOLD) and the rule's action wins, the blender MUST preserve
+    `strike`, `dte`, `stop_loss`, `take_profit` and the rule's metadata.
+
+    Dropping them turned every cash_secured_put SELL_CSP into a
+    `naked_short_block` reading 'needs $0.00 cash collateral; have
+    $0.00' because the risk rule reads `signal.strike` directly. Bot
+    didn't trade for 10+ days on this.
+    """
+    ml = MLSignalModel(model_path="/tmp/__nope__.txt")
+    ml._booster = MagicMock()
+    ml._booster.predict.return_value = [0.5]   # HOLD -> skipped in score
+    blender = SignalBlender(
+        claude=ClaudeSignalGenerator(api_key=""),
+        ml=ml,
+    )
+    rule = Signal(
+        ticker="HD",
+        action=Action.SELL_CSP,
+        confidence=0.85,
+        strategy="cash_secured_put",
+        reason="sell 315 put, IV rank 98",
+        strike=315.0,
+        dte=30,
+        metadata={"strike": 315.0, "expiration": "2026-07-15"},
+    )
+    out = blender.blend(
+        "HD", {"price": 320}, rule,
+        ai_config={"claude_enabled": False, "ml_enabled": True, "ml_weight": 0.5},
+    )
+    assert out.action == Action.SELL_CSP
+    # The fix: strike + dte + metadata survive.
+    assert out.strike == 315.0
+    assert out.dte == 30
+    assert out.metadata.get("strike") == 315.0
+    assert out.metadata.get("expiration") == "2026-07-15"
+    assert "ai_components" in out.metadata
+
+
+def test_account_state_carries_cash_field():
+    """Regression: 2026-06-15 — AccountState was missing `cash`, so
+    `rule_naked_short_block` read `getattr(ctx.account, 'cash', 0.0)`
+    which defaulted to 0.0 and refused every CSP regardless of
+    `paper_account.cash`. Lock the field in place."""
+    from backend.bot.risk import AccountState
+    acct = AccountState(
+        buying_power=5000.0, portfolio_value=5000.0,
+        open_positions=0, daily_pnl=0.0, cash=5000.0,
+    )
+    assert acct.cash == 5000.0
+    # Default still 0.0 when caller forgets — but the engine MUST set it.
+    acct2 = AccountState(buying_power=1.0, portfolio_value=1.0,
+                          open_positions=0)
+    assert acct2.cash == 0.0
