@@ -21,6 +21,9 @@ import {
 import FunnelChart from '../components/FunnelChart.jsx';
 import useFunnel from '../hooks/useFunnel.js';
 import { useLivePrices } from '../hooks/useLivePrice.js';
+import { pickLiveBadge } from '../../lib/liveBadge.js';
+
+const V2_PILL_TONE = { success: 'success', warning: 'warning', danger: 'error', muted: 'neutral' };
 
 const POLL_STATUS_MS    = 5_000;
 const POLL_PROVENANCE_MS = 30_000;
@@ -328,10 +331,16 @@ export default function MissionControl() {
               {fmtPctSigned(changePct)}
             </span>
           : <span className="dim">—</span>,
-        source: <Pill tone={liveTick?.source === 'alpaca' ? 'success'
-                            : liveTick?.source?.includes('stale') ? 'warning' : 'neutral'}>
-                  {liveTick?.source || w.quote?.source || 'unknown'}
-                </Pill>,
+        source: (() => {
+          // 2026-06-15 — consult /quote freshness booleans via pickLiveBadge
+          // so a stale yfinance print can't show as success-green here.
+          const badge = pickLiveBadge(liveTick || w.quote);
+          return (
+            <Pill tone={V2_PILL_TONE[badge.tone] || 'neutral'} title={badge.title}>
+              {badge.label}
+            </Pill>
+          );
+        })(),
         go: <Link to={`/v2/stock/${w.ticker}`}
                   className="v2-mc-go">open →</Link>,
       };

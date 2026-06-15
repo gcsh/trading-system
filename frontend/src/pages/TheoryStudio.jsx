@@ -19,6 +19,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import TheoryChart from '../components/TheoryChart.jsx';
 import { useTheoryMulti, useTheoryRegistry, useQuoteTick } from '../hooks/useTheory.js';
+import { pickLiveBadge } from '../lib/liveBadge.js';
 // F4 — shared chart improvements (selector + fullscreen wrap).
 import ChartFullscreenWrapper from '../components/ChartFullscreenWrapper.jsx';
 import TimeframeSelector from '../components/TimeframeSelector.jsx';
@@ -174,28 +175,37 @@ function AddTheoryPicker({ registry, selected, onAdd }) {
 }
 
 
-function LiveBadge({ live, lastTs, lastPrice, source }) {
+function LiveBadge({ live, quote, fallbackTs }) {
   if (!live) return null;
+  // 2026-06-15 — consult shared pickLiveBadge so a stale yfinance print
+  // can never show up as "LIVE" again (the trust failure the operator
+  // caught). pickLiveBadge reads /quote freshness booleans first and
+  // falls back to source+age heuristics for legacy callers.
+  const badge = pickLiveBadge(quote);
+  const PALETTE = {
+    success: { fg: '#7be0c6', dot: '#3ee0b4', bg: 'rgba(62, 224, 180, 0.16)', border: '#3ee0b4' },
+    warning: { fg: '#ffd166', dot: '#ffb347', bg: 'rgba(255, 179, 71, 0.18)',  border: '#ffb347' },
+    danger:  { fg: '#ffb3b5', dot: '#ff5a5f', bg: 'rgba(255, 90, 95, 0.18)',    border: '#ff5a5f' },
+    muted:   { fg: '#8593b0', dot: '#5e6e8b', bg: 'rgba(94, 110, 139, 0.18)',   border: '#5e6e8b' },
+  };
+  const palette = PALETTE[badge.tone] || PALETTE.muted;
+  const lastTs = (quote && (quote.ts ? quote.ts * 1000 : null)) || fallbackTs;
+  const source = quote && quote.source;
   return (
-    <div style={{
+    <div title={badge.title} style={{
       display: 'inline-flex', alignItems: 'center', gap: 6,
       padding: '3px 8px', borderRadius: 999,
-      background: 'rgba(255, 90, 95, 0.18)',
-      border: '1px solid #ff5a5f', color: '#ffb3b5',
+      background: palette.bg,
+      border: `1px solid ${palette.border}`, color: palette.fg,
       fontSize: 11, fontWeight: 700, letterSpacing: 0.3,
     }}>
       <span style={{
         display: 'inline-block', width: 8, height: 8,
-        borderRadius: '50%', background: '#ff5a5f',
-        boxShadow: '0 0 8px #ff5a5f',
-        animation: 'pulse 1.4s infinite',
+        borderRadius: '50%', background: palette.dot,
+        boxShadow: badge.tone === 'success' ? `0 0 8px ${palette.dot}` : 'none',
+        animation: badge.tone === 'success' ? 'pulse 1.4s infinite' : 'none',
       }} />
-      LIVE
-      {lastPrice != null && lastPrice > 0 && (
-        <span style={{ color: '#ffffff', fontWeight: 700, fontSize: 11 }}>
-          ${Number(lastPrice).toFixed(2)}
-        </span>
-      )}
+      {badge.label}
       {lastTs && (
         <span style={{ color: '#8593b0', fontWeight: 400, fontSize: 10 }}>
           {new Date(lastTs).toLocaleTimeString([], {
@@ -369,8 +379,7 @@ export default function TheoryStudio() {
         <div>
           <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
             Theory Studio v2
-            <LiveBadge live={live} lastTs={liveTick?.ts || payload?.server_ts}
-                       lastPrice={liveTick?.price} source={liveTick?.source} />
+            <LiveBadge live={live} quote={liveTick} fallbackTs={payload?.server_ts} />
           </h3>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
             Pick one or more theories. Each gets a distinct colour. The

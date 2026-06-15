@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { money, shortDate, shortTime } from '../lib/format.js';
 import { useTimelineViewport, useWheelZoom } from '../lib/useTimelineViewport.js';
 import { useLivePrice } from '../lib/useLivePrice.js';
+import { pickLiveBadge } from '../lib/liveBadge.js';
 
 const PRESETS = [
   { label: '1D', period: '1d', interval: '5m' },
@@ -368,13 +369,20 @@ export default function AnnotatedStrategyChart({ strategy, ticker, height = 460 
                       : ' · click to cross-check'}
                 </span>
               )}
-              {live && live.price > 0 && (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--accent)', fontWeight: 600 }}>
-                  <span className="dot pulse" style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)', display: 'inline-block' }} />
-                  LIVE {money(live.price)}
-                  <span style={{ color: 'var(--muted)', fontWeight: 400 }}>· {live.source}</span>
-                </span>
-              )}
+              {live && live.price > 0 && (() => {
+                const badge = pickLiveBadge(live);
+                const color = {
+                  success: 'var(--accent)', warning: '#ffd166',
+                  danger: '#e8606e', muted: 'var(--muted)',
+                }[badge.tone] || 'var(--muted)';
+                return (
+                  <span title={badge.title} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color, fontWeight: 600 }}>
+                    <span className="dot pulse" style={{ width: 6, height: 6, borderRadius: '50%', background: color, display: 'inline-block' }} />
+                    {badge.label}
+                    <span style={{ color: 'var(--muted)', fontWeight: 400 }}>· {live.source}</span>
+                  </span>
+                );
+              })()}
               <span className="row" style={{ gap: 4 }}>
                 <button className="btn small ghost" style={{ padding: '2px 9px', fontWeight: 700 }} title="Zoom out — show more candles" onClick={() => vp.zoom(1.4, 0.5)}>−</button>
                 <button className="btn small ghost" style={{ padding: '2px 9px', fontWeight: 700 }} title="Zoom in — fewer candles" onClick={() => vp.zoom(0.7, 0.5)}>+</button>

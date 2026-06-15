@@ -26,6 +26,9 @@ import {
 import OHLCChart from '../components/OHLCChart.jsx';
 import TheoryOverlay, { buildOverlays } from '../components/TheoryOverlay.jsx';
 import useLivePrice from '../hooks/useLivePrice.js';
+import { pickLiveBadge } from '../../lib/liveBadge.js';
+
+const V2_PILL_TONE = { success: 'success', warning: 'warning', danger: 'error', muted: 'neutral' };
 
 /* ── analysis window mapping ───────────────────────────────────────── */
 const INTERVAL_TO_WINDOW = {
@@ -381,6 +384,10 @@ export default function StockDetail() {
   const priceSource = liveTick?.source || analysis?.bar_source || '—';
   const priceAge = liveTick?.age_seconds != null
     ? `${liveTick.age_seconds.toFixed(0)}s` : '—';
+  // Truth-aware label: pickLiveBadge consults is_fresh / market_status /
+  // approved_source from /quote so a stale yfinance print never reads
+  // as "LIVE" again (operator-caught trust failure, 2026-06-15).
+  const liveBadge = pickLiveBadge(liveTick);
 
   return (
     <div className="v2-sd">
@@ -412,11 +419,10 @@ export default function StockDetail() {
           )}
         </div>
         <div className="v2-sd-header__meta">
-          <Pill tone={liveTick?.source === 'alpaca' ? 'success'
-                      : priceSource?.toString().includes('stale') ? 'warning' : 'neutral'}>
-            {priceSource}
+          <Pill tone={V2_PILL_TONE[liveBadge.tone] || 'neutral'} title={liveBadge.title}>
+            {liveBadge.label}
           </Pill>
-          <span className="dim mono">age {priceAge}</span>
+          <span className="dim mono">{priceSource} · age {priceAge}</span>
         </div>
       </div>
 

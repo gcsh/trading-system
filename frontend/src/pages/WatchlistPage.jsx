@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import Watchlist from '../components/Watchlist.jsx';
 import TheoryChart from '../components/TheoryChart.jsx';
 import { useLivePrice } from '../lib/useLivePrice.js';
+import { pickLiveBadge } from '../lib/liveBadge.js';
 import { money } from '../lib/format.js';
 
 // Chart standardization pass (Phase 19.x) — the watchlist preview chart
@@ -69,18 +70,25 @@ function WatchlistChartPanel({ ticker }) {
         <div>
           <h2 style={{ margin: 0, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
             {ticker || 'Pick a ticker'}
-            {live && live.price > 0 && (
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', gap: 4,
-                fontSize: 11, color: 'var(--accent)', fontWeight: 600,
-              }}>
-                <span style={{
-                  width: 6, height: 6, borderRadius: '50%',
-                  background: 'var(--accent)', display: 'inline-block',
-                }} />
-                LIVE {money(live.price)}
-              </span>
-            )}
+            {live && live.price > 0 && (() => {
+              const badge = pickLiveBadge(live);
+              const color = {
+                success: 'var(--accent)', warning: '#ffd166',
+                danger: '#e8606e', muted: 'var(--muted)',
+              }[badge.tone] || 'var(--muted)';
+              return (
+                <span title={badge.title} style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  fontSize: 11, color, fontWeight: 600,
+                }}>
+                  <span style={{
+                    width: 6, height: 6, borderRadius: '50%',
+                    background: color, display: 'inline-block',
+                  }} />
+                  {badge.label}
+                </span>
+              );
+            })()}
           </h2>
           {ticker && last && (
             <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
