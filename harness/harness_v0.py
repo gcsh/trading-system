@@ -364,8 +364,22 @@ def signal_for_event(date: pd.Timestamp,
                       iv: pd.DataFrame,
                       opts: pd.DataFrame) -> tuple[Optional[int], dict]:
     """Returns (direction in {+1, -1, None}, components_dict).
-       All inputs PIT — only data with index ≤ date."""
-    components = {"flow": None, "term": None, "price": None}
+       All inputs PIT — only data with index ≤ date.
+
+       components carries directional verdict + STATUS for each axis:
+         status in {'bullish', 'bearish', 'null_threshold', 'null_data'}
+       null_threshold = input present, didn't clear ±threshold
+       null_data      = input missing / NaN / zero — cannot evaluate
+       Plus front_iv_present / back_iv_present booleans for the IV-data
+       coverage histogram (so we can tell 'IV killed alignment because the
+       threshold was tight' from 'IV killed alignment because the data is
+       blank in the warehouse')."""
+    components = {
+        "flow": None, "flow_status": "null_data",
+        "term": None, "term_status": "null_data",
+        "price": None, "price_status": "null_data",
+        "front_iv_present": False, "back_iv_present": False,
+    }
 
     # Subset to PIT
     bars_pit = bars.loc[:date]
@@ -386,20 +400,32 @@ def signal_for_event(date: pd.Timestamp,
             skew = (cv - pv) / tot
             if skew > FLOW_SKEW_THRESHOLD:
                 components["flow"] = "bullish"
+                components["flow_status"] = "bullish"
             elif skew < -FLOW_SKEW_THRESHOLD:
                 components["flow"] = "bearish"
+                components["flow_status"] = "bearish"
+            else:
+                components["flow_status"] = "null_threshold"
+        # else: tot==0 → null_data stays
 
     # Component 2 — IV term structure (front vs back)
     if not opts_pit.empty and date in opts_pit.index:
         row = opts_pit.loc[date]
         front = float(row.get("front_iv", np.nan) or np.nan)
         back  = float(row.get("back_iv", np.nan) or np.nan)
+        components["front_iv_present"] = not np.isnan(front)
+        components["back_iv_present"] = not np.isnan(back)
         if not (np.isnan(front) or np.isnan(back)) and back > 0:
             ratio = front / back
             if ratio > TERM_STRUCTURE_BACKWARD:
-                components["term"] = "bearish"   # backwardation = stress = bearish
+                components["term"] = "bearish"
+                components["term_status"] = "bearish"
             elif ratio < TERM_STRUCTURE_CONTANGO:
-                components["term"] = "bullish"   # deep contango = calm = bullish
+                components["term"] = "bullish"
+                components["term_status"] = "bullish"
+            else:
+                components["term_status"] = "null_threshold"
+        # else: NaN front/back → null_data stays
 
     # Component 3 — Price confirmation (close vs 5d trailing mean)
     if len(bars_pit) >= PRICE_CONFIRM_LOOKBACK + 1:
@@ -410,8 +436,13 @@ def signal_for_event(date: pd.Timestamp,
             ret_vs_mean = (today_close - trailing_mean) / trailing_mean
             if ret_vs_mean > PRICE_CONFIRM_THRESHOLD:
                 components["price"] = "bullish"
+                components["price_status"] = "bullish"
             elif ret_vs_mean < -PRICE_CONFIRM_THRESHOLD:
                 components["price"] = "bearish"
+                components["price_status"] = "bearish"
+            else:
+                components["price_status"] = "null_threshold"
+        # else: trailing_mean<=0 → null_data stays
 
     # Alignment AND
     vals = [components["flow"], components["term"], components["price"]]
@@ -746,6 +777,22 @@ def main():
     skipped_no_horizon = 0
     trades_per_horizon: dict[int, list[Trade]] = {h: [] for h in HORIZONS_TRADING_DAYS}
 
+    # ─── DIAGNOSTIC COUNTERS (no hypothesis change, just measure) ────────
+    # Per-component status histogram across all events
+    comp_counts: dict = {
+        "flow":  defaultdict(int),
+        "term":  defaultdict(int),
+        "price": defaultdict(int),
+    }
+    # Pair-alignment: count events where BOTH components are non-null AND agree
+    pair_align: dict = {
+        "flow_term":  defaultdict(int),  # flow ∩ iv_term
+        "flow_price": defaultdict(int),
+        "term_price": defaultdict(int),
+    }
+    # Per-ticker IV data population — how often is front_iv / back_iv computable?
+    iv_pop: dict = defaultdict(lambda: {"front": 0, "back": 0, "both": 0, "events": 0})
+
     for ticker in UNIVERSE_TICKERS:
         if ticker == BENCHMARK:
             continue
@@ -763,6 +810,27 @@ def main():
         for event_date in events.index:
             all_events += 1
             direction, _comp = signal_for_event(event_date, bars, iv, opts)
+
+            # Update diagnostic counters on EVERY event (before any skip)
+            comp_counts["flow"][_comp["flow_status"]]   += 1
+            comp_counts["term"][_comp["term_status"]]   += 1
+            comp_counts["price"][_comp["price_status"]] += 1
+            # Pair alignments — both non-null AND same direction
+            if _comp["flow"] is not None and _comp["term"] is not None and _comp["flow"] == _comp["term"]:
+                pair_align["flow_term"][_comp["flow"]] += 1
+            if _comp["flow"] is not None and _comp["price"] is not None and _comp["flow"] == _comp["price"]:
+                pair_align["flow_price"][_comp["flow"]] += 1
+            if _comp["term"] is not None and _comp["price"] is not None and _comp["term"] == _comp["price"]:
+                pair_align["term_price"][_comp["term"]] += 1
+            # IV data coverage per ticker
+            iv_pop[ticker]["events"] += 1
+            if _comp["front_iv_present"]:
+                iv_pop[ticker]["front"] += 1
+            if _comp["back_iv_present"]:
+                iv_pop[ticker]["back"] += 1
+            if _comp["front_iv_present"] and _comp["back_iv_present"]:
+                iv_pop[ticker]["both"] += 1
+
             if direction is None:
                 skipped_no_signal += 1
                 continue
@@ -776,6 +844,34 @@ def main():
 
     print(f"\n[events] detected={all_events} · aligned (3-component AND)={all_aligned}")
     print(f"[skips]  no_bars={skipped_no_bars} no_signal={skipped_no_signal} no_horizon={skipped_no_horizon}")
+
+    # ─── DIAGNOSTIC OUTPUT: where are events dying? ──────────────────────
+    print("\n=== COMPONENT DIAGNOSTIC ===")
+    print(f"Total events evaluated: {all_events}")
+    print("\nPer-component status (every event counted once per axis):")
+    print(f"  {'axis':14s} {'bullish':>10s} {'bearish':>10s} {'null_thr':>10s} {'null_data':>10s}")
+    for axis_name, axis_key in [("flow", "flow"), ("iv_term", "term"), ("price_confirm", "price")]:
+        c = comp_counts[axis_key]
+        print(f"  {axis_name:14s} {c['bullish']:>10d} {c['bearish']:>10d} "
+              f"{c['null_threshold']:>10d} {c['null_data']:>10d}")
+    print("\nPair-alignment (both axes non-null AND same direction):")
+    for label, key in [("flow ∩ iv_term", "flow_term"),
+                        ("flow ∩ price ", "flow_price"),
+                        ("iv_term ∩ price", "term_price")]:
+        p = pair_align[key]
+        n = p["bullish"] + p["bearish"]
+        print(f"  {label:16s}  total={n:>5d}  bull={p['bullish']:>5d}  bear={p['bearish']:>5d}")
+    print(f"\nTriple alignment (current AND, must all be same direction): {all_aligned}")
+
+    print("\nIV term-structure data coverage per ticker (front_iv / back_iv populated):")
+    print(f"  {'ticker':8s}  {'events':>7s}  {'front':>7s}  {'back':>7s}  {'both':>7s}  {'%both':>7s}")
+    for tkr in sorted(iv_pop.keys()):
+        p = iv_pop[tkr]
+        if p["events"] == 0:
+            continue
+        pct = 100.0 * p["both"] / p["events"]
+        print(f"  {tkr:8s}  {p['events']:>7d}  {p['front']:>7d}  {p['back']:>7d}  "
+              f"{p['both']:>7d}  {pct:>6.1f}%")
 
     # Per-horizon analysis
     overall_verdict = "DEAD"
