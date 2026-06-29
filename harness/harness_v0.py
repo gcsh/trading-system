@@ -211,10 +211,10 @@ def load_stock_bars(con: sqlite3.Connection, ticker: str) -> pd.DataFrame:
 def load_iv_history(con: sqlite3.Connection, ticker: str) -> pd.DataFrame:
     """Daily IV per ticker. Probes schema to find the right columns."""
     cols = _probe_columns(con, "iv_history")
-    # Common candidates from prior data layer
+    # Actual schema: ticker, date, iv_atm, expiry_used, dte_used, source, fetched_at
     ts_col = next((c for c in cols if c in ("observation_date", "date", "bar_ts", "ts")), None)
-    iv_col = next((c for c in cols if c in ("iv", "iv_value", "atm_iv", "front_iv")), None)
-    dte_col = next((c for c in cols if c in ("dte", "days_to_expiry")), None)
+    iv_col = next((c for c in cols if c in ("iv_atm", "iv", "iv_value", "atm_iv", "front_iv")), None)
+    dte_col = next((c for c in cols if c in ("dte_used", "dte", "days_to_expiry")), None)
     if not ts_col or not iv_col:
         return pd.DataFrame()
     sql = f"SELECT {ts_col} AS ts, {iv_col} AS iv"
@@ -232,20 +232,27 @@ def load_iv_history(con: sqlite3.Connection, ticker: str) -> pd.DataFrame:
 
 def load_option_volume_oi(con: sqlite3.Connection, ticker: str) -> pd.DataFrame:
     """Per-day aggregate: total volume, call/put split, total OI, front/back IV proxy.
-       Falls back to whatever option_contract_bars has."""
+       Schema in this warehouse: ticker, expiration, strike, "right", bar_date,
+       open/high/low/close/bid/ask/mid, iv, delta/gamma/vega/theta, volume,
+       open_interest, trade_count, source, fetched_at."""
     cols = _probe_columns(con, "option_contract_bars")
-    # Required: ticker, bar_ts, volume, option_type (call/put), expiration, strike
-    needed = {"ticker", "bar_ts", "volume"}
     have = set(cols)
-    if not needed.issubset(have):
+    # Find the time column — this warehouse uses bar_date
+    ts_col = next((c for c in cols if c in ("bar_date", "bar_ts", "date", "ts")), None)
+    vol_col = next((c for c in cols if c in ("volume", "vol")), None)
+    if not ts_col or not vol_col or "ticker" not in have:
         return pd.DataFrame()
-    type_col = next((c for c in cols if c in ("option_type", "right", "type", "cp")), None)
+    type_col = next((c for c in cols if c in ("right", "option_type", "type", "cp")), None)
     expiry_col = next((c for c in cols if c in ("expiration", "expiry", "exp_date")), None)
     oi_col = next((c for c in cols if c in ("open_interest", "oi")), None)
     iv_col = next((c for c in cols if c in ("iv", "implied_vol")), None)
-    selects = ["bar_ts", "volume"]
-    if type_col:
-        selects.append(f"{type_col} AS option_type")
+    # SQLite reserves `right` as an identifier; quote it.
+    type_select = f'"{type_col}" AS option_type' if type_col == "right" else (
+        f"{type_col} AS option_type" if type_col else None
+    )
+    selects = [f"{ts_col} AS bar_ts", f"{vol_col} AS volume"]
+    if type_select:
+        selects.append(type_select)
     if expiry_col:
         selects.append(f"{expiry_col} AS expiration")
     if oi_col:
@@ -253,7 +260,7 @@ def load_option_volume_oi(con: sqlite3.Connection, ticker: str) -> pd.DataFrame:
     if iv_col:
         selects.append(f"{iv_col} AS iv")
     sql = (f"SELECT {', '.join(selects)} FROM option_contract_bars "
-           f"WHERE ticker = ? ORDER BY bar_ts")
+           f"WHERE ticker = ? ORDER BY {ts_col}")
     df = pd.read_sql_query(sql, con, params=(ticker,))
     if df.empty:
         return df
@@ -265,8 +272,10 @@ def load_option_volume_oi(con: sqlite3.Connection, ticker: str) -> pd.DataFrame:
     for d, g in df.groupby("date"):
         row = {"date": d, "total_vol": float(g["volume"].fillna(0).sum())}
         if "option_type" in g.columns:
-            mask_call = g["option_type"].astype(str).str.lower().str.startswith(("c", "call"))
-            mask_put = g["option_type"].astype(str).str.lower().str.startswith(("p", "put"))
+            # Schema uses 'C' / 'P' single-letter codes
+            ot = g["option_type"].astype(str).str.upper().str.strip()
+            mask_call = ot.str.startswith("C")
+            mask_put = ot.str.startswith("P")
             row["call_vol"] = float(g.loc[mask_call, "volume"].fillna(0).sum())
             row["put_vol"] = float(g.loc[mask_put, "volume"].fillna(0).sum())
         else:
